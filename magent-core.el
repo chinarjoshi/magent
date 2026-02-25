@@ -82,6 +82,8 @@
 (defun magent--work-to-plist (work)
   "Serialize WORK to a plist for persistence."
   (list :dir (magent-work-dir work)
+        :repo (magent-work-repo work)
+        :branch (magent-work-branch work)
         :purpose (magent-work-purpose work)
         :state (magent-work-state work)
         :session-id (magent-work-session-id work)
@@ -89,12 +91,22 @@
 
 (defun magent--plist-to-work (plist)
   "Deserialize a PLIST to a Work struct."
-  (magent-work--internal-create
-   :dir (plist-get plist :dir)
-   :purpose (plist-get plist :purpose)
-   :state (plist-get plist :state)
-   :session-id (plist-get plist :session-id)
-   :pr (plist-get plist :pr)))
+  (let ((work (magent-work--internal-create
+               :dir (plist-get plist :dir)
+               :repo (plist-get plist :repo)
+               :branch (plist-get plist :branch)
+               :purpose (plist-get plist :purpose)
+               :state (plist-get plist :state)
+               :session-id (plist-get plist :session-id)
+               :pr (plist-get plist :pr))))
+    ;; Re-derive repo/branch if missing (old state files)
+    (when (and (magent-work-dir work)
+               (null (magent-work-repo work)))
+      (setf (magent-work-repo work)
+            (magent--git-repo-root (magent-work-dir work)))
+      (setf (magent-work-branch work)
+            (magent--git-branch (magent-work-dir work))))
+    work))
 
 (defun magent-state-save (works)
   "Save WORKS list to `magent-state-file'."

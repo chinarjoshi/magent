@@ -88,14 +88,14 @@
                     (file-name-nondirectory
                      (directory-file-name (magent-work-dir work))))))
     (magit-insert-section (magent-work-section work)
-      (magit-insert-heading
-        (propertize (format "  %-25s" branch)
-                    'face (magent--state-face state))
-        (propertize (format "[%s]" (magent--state-label state))
-                    'face (magent--state-face state))
-        (let ((recent (magent--format-recent work)))
-          (unless (string-empty-p recent)
-            (format "  %s" recent))))
+      (let* ((face (magent--state-face state))
+             (recent (magent--format-recent work))
+             (heading (concat
+                       (propertize (format "  %-25s" branch) 'face face)
+                       (propertize (format "[%s]" (magent--state-label state)) 'face face)
+                       (unless (string-empty-p recent)
+                         (format "  %s" recent)))))
+        (magit-insert-heading heading))
       ;; Files subsection
       (when (magent-work-files work)
         (dolist (file (magent-work-files work))
@@ -112,9 +112,10 @@
                       0)))
     (magit-insert-section (magent-repo-section repo)
       (magit-insert-heading
-        (propertize (abbreviate-file-name repo) 'face 'magent-face-repo)
-        (when (> todo-count 0)
-          (format "  %d TODOs" todo-count)))
+        (concat
+         (propertize (abbreviate-file-name repo) 'face 'magent-face-repo)
+         (when (> todo-count 0)
+           (format "  %d TODOs" todo-count))))
       (dolist (w works)
         (magent--insert-work w))
       (insert "\n"))))
