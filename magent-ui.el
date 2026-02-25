@@ -101,7 +101,21 @@
                        (unless (string-empty-p recent)
                          (format "  %s" recent)))))
         (magit-insert-heading heading))
-      ;; Files subsection
+      ;; Foldable body content
+      (let ((purpose (magent-work-purpose work))
+            (dir (abbreviate-file-name (magent-work-dir work))))
+        ;; Always show directory
+        (insert (propertize (format "    %s\n" dir) 'font-lock-face 'shadow))
+        ;; Show purpose if non-empty
+        (when (and purpose (not (string-empty-p purpose)))
+          (let ((display (truncate-string-to-width purpose 80)))
+            (insert (propertize (format "    %s\n" display) 'font-lock-face 'shadow))))
+        ;; Session ID
+        (when (magent-work-session-id work)
+          (insert (propertize (format "    session: %s\n"
+                                      (magent-work-session-id work))
+                              'font-lock-face 'shadow))))
+      ;; Files being touched
       (when (magent-work-files work)
         (dolist (file (magent-work-files work))
           (magit-insert-section (magent-file-section file)

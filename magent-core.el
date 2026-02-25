@@ -237,15 +237,20 @@ Returns list of Work structs (state idle, with session-id)."
                                                (expand-file-name d) cwd))
                                             filter-dirs)))
                       (puthash cwd t seen-cwds)
-                      (push (magent-work--internal-create
-                             :dir cwd
-                             :repo (magent--git-repo-root cwd)
-                             :branch (or branch (magent--git-branch cwd))
-                             :purpose (or (alist-get 'prompt meta) "")
-                             :state 'idle
-                             :session-id sid)
+                      (push (cons (file-attribute-modification-time
+                                   (file-attributes latest))
+                                  (magent-work--internal-create
+                                   :dir cwd
+                                   :repo (magent--git-repo-root cwd)
+                                   :branch (or branch (magent--git-branch cwd))
+                                   :purpose (or (alist-get 'prompt meta) "")
+                                   :state 'idle
+                                   :session-id sid))
                             works))))))))))
-    (nreverse works)))
+    ;; Sort by recency (most recent first), then strip timestamps
+    (mapcar #'cdr
+            (sort works (lambda (a b)
+                          (time-less-p (car b) (car a)))))))
 
 (provide 'magent-core)
 ;;; magent-core.el ends here
