@@ -21,5 +21,23 @@
 (require 'magent-backend)
 (require 'magent-ui)
 
+(defgroup magent nil
+  "Magit-style porcelain for AI agents."
+  :group 'tools
+  :prefix "magent-")
+
+;;;###autoload
+(defun magent ()
+  "Open the magent dashboard."
+  (interactive)
+  (let ((buf (get-buffer-create "*magent*")))
+    (with-current-buffer buf
+      (unless (derived-mode-p 'magent-mode)
+        (magent-mode))
+      (unless magent--works
+        (setq magent--works (or (magent-state-load) nil)))
+      (magent-refresh))
+    (switch-to-buffer buf)))
+
 (provide 'magent)
 ;;; magent.el ends here
