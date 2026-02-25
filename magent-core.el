@@ -72,6 +72,26 @@
   "Return non-nil if WORK is done."
   (eq (magent-work-state work) 'done))
 
+(defun magent--branch-merged-p (dir branch)
+  "Return non-nil if BRANCH is merged into the default branch in DIR."
+  (when (and dir branch (file-directory-p dir)
+             (not (member branch '("main" "master" "HEAD"))))
+    (let ((default-directory dir))
+      ;; Find default branch (origin/HEAD -> main or master)
+      (let ((default-branch
+             (with-temp-buffer
+               (if (zerop (call-process "git" nil t nil
+                                        "symbolic-ref" "refs/remotes/origin/HEAD"))
+                   (replace-regexp-in-string
+                    "^refs/remotes/origin/" ""
+                    (string-trim (buffer-string)))
+                 "main"))))
+        ;; Check if branch is ancestor of default branch
+        (with-temp-buffer
+          (zerop (call-process "git" nil t nil
+                               "merge-base" "--is-ancestor"
+                               branch default-branch)))))))
+
 ;; Persistence
 
 (defcustom magent-state-file
@@ -163,6 +183,18 @@
       (when (file-regular-p f)
         (cl-incf total (magent-count-todos-in-file f))))
     total))
+
+(defun magent-auto-archive-merged (works)
+  "Mark WORKS whose branches have been merged as done.
+Modifies works in place, returns count of newly archived."
+  (let ((count 0))
+    (dolist (w works)
+      (when (and (not (magent-work-done-p w))
+                 (magent--branch-merged-p (magent-work-repo w)
+                                          (magent-work-branch w)))
+        (setf (magent-work-state w) 'done)
+        (cl-incf count)))
+    count))
 
 ;;; Session discovery from ~/.claude/projects/
 

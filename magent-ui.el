@@ -19,7 +19,9 @@
 
 ;; Branch faces — color tells you the state at a glance
 (defface magent-face-branch-working
-  '((t :inherit magit-branch-remote :weight normal))
+  '((((class color) (background dark)) :foreground "#61afef")
+    (((class color) (background light)) :foreground "#4078f2")
+    (t :inherit default))
   "Face for branch names of working agents."
   :group 'magent-faces)
 
@@ -34,8 +36,10 @@
   :group 'magent-faces)
 
 (defface magent-face-branch-done
-  '((t :inherit success))
-  "Face for branch names of completed work."
+  '((((class color) (background dark)) :foreground "#c678dd")
+    (((class color) (background light)) :foreground "#a626a4")
+    (t :inherit success))
+  "Face for branch names of completed/merged work."
   :group 'magent-faces)
 
 ;; Status badge faces
@@ -59,8 +63,10 @@
   :group 'magent-faces)
 
 (defface magent-face-status-done
-  '((t :inherit success :weight normal))
-  "Face for [done] status badge."
+  '((((class color) (background dark)) :foreground "#c678dd")
+    (((class color) (background light)) :foreground "#a626a4")
+    (t :inherit success))
+  "Face for [done/merged] status badge."
   :group 'magent-faces)
 
 ;; Repo face — distinct from branch
@@ -251,6 +257,8 @@
 (defun magent-refresh-buffer ()
   "Refresh the *magent* buffer contents."
   (when (derived-mode-p 'magent-mode)
+    ;; Auto-archive merged branches
+    (magent-auto-archive-merged magent--works)
     (let* ((inhibit-read-only t)
            (active (seq-filter (lambda (w) (not (magent-work-done-p w))) magent--works))
            (archive (seq-filter #'magent-work-done-p magent--works))
