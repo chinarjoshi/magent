@@ -262,16 +262,41 @@
 ;;; Interactive commands
 
 (defun magent-visit ()
-  "Visit the thing at point -- file or agent output."
+  "Visit the thing at point.
+On a file section, open the file.
+On a work section, open the agent CLI via claude-code.el.
+On a repo section, browse backlog."
   (interactive)
   (let ((section (magit-current-section)))
     (cond
      ((magent-file-section-p section)
       (find-file (oref section value)))
      ((magent-work-section-p section)
-      (magent-show-process))
+      (magent-open-agent))
      ((magent-repo-section-p section)
       (magent-browse-backlog)))))
+
+(defun magent-open-agent ()
+  "Open the agent CLI for Work at point via claude-code.el."
+  (interactive)
+  (when-let ((work (magent--work-at-point)))
+    (let ((default-directory (magent-work-dir work))
+          (sid (magent-work-session-id work)))
+      (cond
+       ((fboundp 'claude-code--start)
+        (if sid
+            (claude-code--start nil (list "--resume" sid) nil t)
+          (claude-code--start nil nil nil t)))
+       (t
+        (if sid
+            (let* ((buf-name (format "*magent-agent-%s*"
+                                     (or (magent-work-branch work) "agent")))
+                   (buf (make-comint-in-buffer
+                         buf-name nil
+                         magent-agent-command nil
+                         "--resume" sid)))
+              (switch-to-buffer-other-window buf))
+          (message "No session to resume. Use N to create one.")))))))
 
 (defun magent-show-process ()
   "Show the agent process buffer for Work at point."
