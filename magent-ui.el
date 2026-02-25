@@ -159,6 +159,7 @@
     (define-key map (kbd "i") #'magent-send-input)
     (define-key map (kbd "N") #'magent-new-work)
     (define-key map (kbd "D") #'magent-mark-done)
+    (define-key map (kbd "?") #'magent-help)
     map)
   "Keymap for `magent-mode'.")
 
@@ -374,6 +375,42 @@ On a repo section, resume all idle Works under it."
     (setf (magent-work-state work) 'done)
     (magent-state-save magent--works)
     (magent-refresh)))
+
+(defun magent-help ()
+  "Show magent keybindings."
+  (interactive)
+  (let ((buf (get-buffer-create "*magent-help*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "Magent keybindings\n\n"
+                "Navigation\n"
+                "  TAB       Toggle section\n"
+                "  S-TAB     Toggle all sections\n"
+                "  n / p     Next / previous section\n\n"
+                "Actions on work at point\n"
+                "  RET       Visit (agent output or file)\n"
+                "  i         Send input to agent\n"
+                "  r         Resume (work or all in repo)\n"
+                "  k         Kill agent session\n"
+                "  D         Mark done / archive\n\n"
+                "Git integration\n"
+                "  c         Tell agent to commit\n"
+                "  P         Tell agent to open PR\n"
+                "  d         Diff (magit-diff in worktree)\n"
+                "  f         Fetch in worktree\n\n"
+                "Tools\n"
+                "  !         Shell command in worktree\n"
+                "  $         Show agent process buffer\n"
+                "  l         Agent event log\n"
+                "  b         Browse backlog org files\n\n"
+                "Global\n"
+                "  N         New work\n"
+                "  g         Refresh\n"
+                "  ?         This help\n"))
+      (special-mode)
+      (goto-char (point-min)))
+    (display-buffer buf)))
 
 (provide 'magent-ui)
 ;;; magent-ui.el ends here
