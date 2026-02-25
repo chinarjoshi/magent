@@ -96,8 +96,8 @@
       (let* ((state-face (magent--state-face state))
              (recent (magent--format-recent work))
              (heading (concat
-                       (propertize (format "  %-25s" branch) 'face 'magent-face-branch)
-                       (propertize (format "[%s]" (magent--state-label state)) 'face state-face)
+                       (propertize (format "  %-25s" branch) 'font-lock-face 'magent-face-branch)
+                       (propertize (format "[%s]" (magent--state-label state)) 'font-lock-face state-face)
                        (unless (string-empty-p recent)
                          (format "  %s" recent)))))
         (magit-insert-heading heading))
@@ -118,7 +118,7 @@
     (magit-insert-section (magent-repo-section repo)
       (magit-insert-heading
         (concat
-         (propertize (abbreviate-file-name repo) 'face 'magent-face-repo)
+         (propertize (abbreviate-file-name repo) 'font-lock-face 'magent-face-repo)
          (when (> todo-count 0)
            (format "  %d TODOs" todo-count))))
       (dolist (w works)
@@ -179,7 +179,6 @@
       (dolist (binding (cdr group))
         (let ((key (car binding))
               (cmd (cadr binding)))
-          ;; Skip bindings already in parent map (TAB, S-TAB, n, p)
           (unless (lookup-key magit-section-mode-map (kbd key))
             (define-key map (kbd key) cmd)))))
     map)
@@ -190,6 +189,25 @@
   :group 'magent
   (setq-local revert-buffer-function #'magent--revert-buffer)
   (setq buffer-read-only t))
+
+;; Evil integration — bind in normal state so Evil doesn't shadow them
+(with-eval-after-load 'evil
+  (evil-set-initial-state 'magent-mode 'normal)
+  (let ((map (evil-get-auxiliary-keymap magent-mode-map 'normal t t)))
+    (dolist (group magent-bindings)
+      (dolist (binding (cdr group))
+        (let ((key (car binding))
+              (cmd (cadr binding)))
+          (define-key map (kbd key) cmd))))
+    ;; Suppress destructive Evil commands in this buffer
+    (evil-define-key* 'normal magent-mode-map
+      "q" #'quit-window
+      "j" #'magit-section-forward
+      "k" #'magit-section-backward
+      "J" #'magit-section-forward-sibling
+      "K" #'magit-section-backward-sibling
+      (kbd "C-j") #'magit-section-forward
+      (kbd "C-k") #'magit-section-backward)))
 
 (defun magent--revert-buffer (_ignore-auto _noconfirm)
   "Revert the magent buffer by refreshing."

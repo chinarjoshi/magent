@@ -86,7 +86,7 @@
                                 "feat/idle" "feat/done"))
                 (let ((pos (string-match (regexp-quote branch) content)))
                   (should pos)
-                  (should (eq (get-text-property pos 'face content)
+                  (should (eq (get-text-property pos 'font-lock-face content)
                               'magent-face-branch))))
               ;; Status badges should have their state face
               (dolist (pair '(("\\[working\\]" magent-face-working)
@@ -97,7 +97,7 @@
                        (expected-face (cadr pair))
                        (pos (string-match label content)))
                   (should pos)
-                  (should (eq (get-text-property pos 'face content)
+                  (should (eq (get-text-property pos 'font-lock-face content)
                               expected-face)))))))
       (when (get-buffer "*magent*")
         (kill-buffer "*magent*"))
