@@ -49,4 +49,32 @@
             (should (equal (magent-work-repo w) (file-name-as-directory tmp)))))
       (delete-directory tmp t))))
 
+(ert-deftest magent-state-save-load-roundtrip ()
+  "Works should survive a save/load cycle."
+  (let* ((state-file (make-temp-file "magent-state" nil ".el"))
+         (magent-state-file state-file)
+         (works (list (magent-work--internal-create
+                       :dir "/tmp/a" :purpose "task A" :state 'working
+                       :session-id "sess-1")
+                      (magent-work--internal-create
+                       :dir "/tmp/b" :purpose "task B" :state 'done
+                       :pr "https://github.com/org/repo/pull/42"))))
+    (unwind-protect
+        (progn
+          (magent-state-save works)
+          (let ((loaded (magent-state-load)))
+            (should (= (length loaded) 2))
+            (should (equal (magent-work-dir (car loaded)) "/tmp/a"))
+            (should (equal (magent-work-purpose (car loaded)) "task A"))
+            (should (eq (magent-work-state (car loaded)) 'working))
+            (should (equal (magent-work-session-id (car loaded)) "sess-1"))
+            (should (equal (magent-work-pr (cadr loaded))
+                           "https://github.com/org/repo/pull/42"))))
+      (delete-file state-file))))
+
+(ert-deftest magent-state-load-missing-file ()
+  "Loading from nonexistent file should return nil, not error."
+  (let ((magent-state-file "/tmp/magent-nonexistent-state.el"))
+    (should (null (magent-state-load)))))
+
 ;;; test/test-magent-core.el ends here

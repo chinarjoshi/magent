@@ -75,5 +75,49 @@
   "Return non-nil if WORK is done."
   (eq (magent-work-state work) 'done))
 
+;; Persistence
+
+(defcustom magent-state-file
+  (expand-file-name "magent/state.el" user-emacs-directory)
+  "Path to persist Work state."
+  :type 'file
+  :group 'magent)
+
+(defun magent--work-to-plist (work)
+  "Serialize WORK to a plist for persistence."
+  (list :dir (magent-work-dir work)
+        :purpose (magent-work-purpose work)
+        :state (magent-work-state work)
+        :session-id (magent-work-session-id work)
+        :pr (magent-work-pr work)))
+
+(defun magent--plist-to-work (plist)
+  "Deserialize a PLIST to a Work struct."
+  (magent-work--internal-create
+   :dir (plist-get plist :dir)
+   :purpose (plist-get plist :purpose)
+   :state (plist-get plist :state)
+   :session-id (plist-get plist :session-id)
+   :pr (plist-get plist :pr)))
+
+(defun magent-state-save (works)
+  "Save WORKS list to `magent-state-file'."
+  (let ((dir (file-name-directory magent-state-file)))
+    (unless (file-directory-p dir)
+      (make-directory dir t)))
+  (with-temp-file magent-state-file
+    (insert ";; -*- lisp-data -*-\n")
+    (insert ";; Magent state — do not edit by hand.\n")
+    (pp (mapcar #'magent--work-to-plist works) (current-buffer))))
+
+(defun magent-state-load ()
+  "Load Works from `magent-state-file'.  Return list or nil."
+  (when (file-exists-p magent-state-file)
+    (condition-case nil
+        (with-temp-buffer
+          (insert-file-contents magent-state-file)
+          (mapcar #'magent--plist-to-work (read (current-buffer))))
+      (error nil))))
+
 (provide 'magent-core)
 ;;; magent-core.el ends here
