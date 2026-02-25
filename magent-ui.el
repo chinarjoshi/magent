@@ -269,16 +269,36 @@
       (magent-refresh))))
 
 (defun magent-resume ()
-  "Resume an idle agent session."
+  "Resume idle agent sessions.
+On a Work section, resume that Work.
+On a repo section, resume all idle Works under it."
   (interactive)
-  (when-let* ((work (magent--work-at-point))
-              (sid (magent-work-session-id work)))
-    (if (magent-work-idle-p work)
-        (progn
-          (magent-backend-resume sid)
-          (setf (magent-work-state work) 'working)
-          (magent-refresh))
-      (message "Work is not idle."))))
+  (let ((section (magit-current-section)))
+    (cond
+     ((magent-repo-section-p section)
+      (let ((repo (oref section value))
+            (resumed 0))
+        (dolist (work magent--works)
+          (when (and (equal (magent-work-repo work) repo)
+                     (magent-work-idle-p work)
+                     (magent-work-session-id work))
+            (magent-backend-resume (magent-work-session-id work))
+            (setf (magent-work-state work) 'working)
+            (cl-incf resumed)))
+        (if (> resumed 0)
+            (progn
+              (message "Resumed %d agent%s." resumed (if (= resumed 1) "" "s"))
+              (magent-refresh))
+          (message "No idle sessions in %s." (abbreviate-file-name repo)))))
+     (t
+      (when-let* ((work (magent--work-at-point))
+                  (sid (magent-work-session-id work)))
+        (if (magent-work-idle-p work)
+            (progn
+              (magent-backend-resume sid)
+              (setf (magent-work-state work) 'working)
+              (magent-refresh))
+          (message "Work is not idle.")))))))
 
 (defun magent-browse-backlog ()
   "Open backlog org files for the repo at point."
