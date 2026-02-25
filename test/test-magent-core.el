@@ -77,4 +77,31 @@
   (let ((magent-state-file "/tmp/magent-nonexistent-state.el"))
     (should (null (magent-state-load)))))
 
+(ert-deftest magent-group-works-by-repo ()
+  "Works should group by their repo field."
+  (let ((works (list (magent-work--internal-create
+                      :dir "/a/wt1" :repo "/a/" :purpose "x")
+                     (magent-work--internal-create
+                      :dir "/b/wt1" :repo "/b/" :purpose "y")
+                     (magent-work--internal-create
+                      :dir "/a/wt2" :repo "/a/" :purpose "z"))))
+    (let ((groups (magent-group-by-repo works)))
+      (should (= (length groups) 2))
+      (should (= (length (cdr (assoc "/a/" groups))) 2))
+      (should (= (length (cdr (assoc "/b/" groups))) 1)))))
+
+(ert-deftest magent-count-org-todos ()
+  "Should count TODO headings in org files."
+  (let ((tmp (make-temp-file "magent-org" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "* TODO First task\n")
+            (insert "* DONE Completed task\n")
+            (insert "* TODO Second task\n")
+            (insert "** TODO Nested task\n")
+            (insert "* Not a todo\n"))
+          (should (= (magent-count-todos-in-file tmp) 3)))
+      (delete-file tmp))))
+
 ;;; test/test-magent-core.el ends here

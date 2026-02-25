@@ -119,5 +119,41 @@
           (mapcar #'magent--plist-to-work (read (current-buffer))))
       (error nil))))
 
+(defcustom magent-backlog-glob "*.org"
+  "Glob pattern for finding backlog org files in repo roots."
+  :type 'string
+  :group 'magent)
+
+(defun magent-group-by-repo (works)
+  "Group WORKS by repo. Return alist of (repo . works)."
+  (let ((groups nil))
+    (dolist (w works)
+      (let* ((repo (or (magent-work-repo w) "unknown"))
+             (cell (assoc repo groups)))
+        (if cell
+            (setcdr cell (append (cdr cell) (list w)))
+          (push (cons repo (list w)) groups))))
+    (nreverse groups)))
+
+(defun magent-count-todos-in-file (file)
+  "Count TODO headings in an org FILE."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let ((count 0))
+      (goto-char (point-min))
+      (while (re-search-forward "^\\*+ \\(TODO\\|NEXT\\|WAITING\\) " nil t)
+        (cl-incf count))
+      count)))
+
+(defun magent-repo-todo-count (repo-dir)
+  "Count total TODOs across org files in REPO-DIR root."
+  (let ((org-files (file-expand-wildcards
+                    (expand-file-name magent-backlog-glob repo-dir)))
+        (total 0))
+    (dolist (f org-files)
+      (when (file-regular-p f)
+        (cl-incf total (magent-count-todos-in-file f))))
+    total))
+
 (provide 'magent-core)
 ;;; magent-core.el ends here
