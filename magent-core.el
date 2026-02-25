@@ -163,5 +163,89 @@
         (cl-incf total (magent-count-todos-in-file f))))
     total))
 
+;;; Session discovery from ~/.claude/projects/
+
+(require 'json)
+
+(defcustom magent-claude-projects-dir
+  (expand-file-name "projects" (expand-file-name ".claude" "~"))
+  "Directory where Claude Code stores project sessions."
+  :type 'directory
+  :group 'magent)
+
+(defun magent--session-metadata (jsonl-file)
+  "Extract metadata from the first user message in JSONL-FILE.
+Returns alist with session-id, cwd, branch, timestamp, prompt."
+  (condition-case nil
+      (with-temp-buffer
+        (insert-file-contents jsonl-file nil 0 8192) ; read first 8K
+        (goto-char (point-min))
+        (let (result)
+          (while (and (not result) (not (eobp)))
+            (let* ((line (buffer-substring (line-beginning-position)
+                                           (line-end-position)))
+                   (msg (condition-case nil
+                            (json-read-from-string line)
+                          (error nil))))
+              (when (and msg (equal (alist-get 'type msg) "user"))
+                (setq result
+                      (list (cons 'session-id (alist-get 'sessionId msg))
+                            (cons 'cwd (alist-get 'cwd msg))
+                            (cons 'branch (alist-get 'gitBranch msg))
+                            (cons 'timestamp (alist-get 'timestamp msg))
+                            (cons 'prompt
+                                  (let ((content (alist-get 'content
+                                                            (alist-get 'message msg))))
+                                    (when (stringp content)
+                                      (truncate-string-to-width content 200))))))))
+            (forward-line 1))
+          result))
+    (error nil)))
+
+(defun magent-discover-sessions (&optional filter-dirs)
+  "Discover Claude sessions from `magent-claude-projects-dir'.
+Scans all project directories, extracts cwd from session metadata.
+If FILTER-DIRS is non-nil, only return sessions whose cwd is under
+one of those directories.
+Returns list of Work structs (state idle, with session-id)."
+  (let ((works nil)
+        (seen-cwds (make-hash-table :test 'equal)))
+    (when (file-directory-p magent-claude-projects-dir)
+      (dolist (proj-name (directory-files magent-claude-projects-dir nil "^-"))
+        (let ((proj-dir (expand-file-name proj-name magent-claude-projects-dir)))
+          (when (file-directory-p proj-dir)
+            ;; Find most recent session file
+            (let* ((jsonls (directory-files proj-dir t "\\.jsonl$"))
+                   (sorted (sort jsonls
+                                 (lambda (a b)
+                                   (time-less-p (file-attribute-modification-time
+                                                 (file-attributes b))
+                                                (file-attribute-modification-time
+                                                 (file-attributes a))))))
+                   (latest (car sorted)))
+              (when latest
+                (when-let ((meta (magent--session-metadata latest)))
+                  (let ((cwd (alist-get 'cwd meta))
+                        (sid (alist-get 'session-id meta))
+                        (branch (alist-get 'branch meta)))
+                    (when (and cwd
+                               (file-directory-p cwd)
+                               (not (gethash cwd seen-cwds))
+                               (or (null filter-dirs)
+                                   (cl-some (lambda (d)
+                                              (string-prefix-p
+                                               (expand-file-name d) cwd))
+                                            filter-dirs)))
+                      (puthash cwd t seen-cwds)
+                      (push (magent-work--internal-create
+                             :dir cwd
+                             :repo (magent--git-repo-root cwd)
+                             :branch (or branch (magent--git-branch cwd))
+                             :purpose (or (alist-get 'prompt meta) "")
+                             :state 'idle
+                             :session-id sid)
+                            works))))))))))
+    (nreverse works)))
+
 (provide 'magent-core)
 ;;; magent-core.el ends here

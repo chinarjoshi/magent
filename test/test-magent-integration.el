@@ -80,14 +80,21 @@
             (magent))
           (with-current-buffer "*magent*"
             (let ((content (buffer-string)))
-              ;; Find each branch in buffer and check its face
-              (dolist (pair '(("feat/working" magent-face-working)
-                              ("feat/needs-input" magent-face-needs-input)
-                              ("feat/idle" magent-face-idle)
-                              ("feat/done" magent-face-done)))
-                (let* ((branch (car pair))
+              ;; Branch names should all have magent-face-branch
+              (dolist (branch '("feat/working" "feat/needs-input"
+                                "feat/idle" "feat/done"))
+                (let ((pos (string-match (regexp-quote branch) content)))
+                  (should pos)
+                  (should (eq (get-text-property pos 'face content)
+                              'magent-face-branch))))
+              ;; Status badges should have their state face
+              (dolist (pair '(("\\[working\\]" magent-face-working)
+                              ("\\[needs input\\]" magent-face-needs-input)
+                              ("\\[idle\\]" magent-face-idle)
+                              ("\\[done\\]" magent-face-done)))
+                (let* ((label (car pair))
                        (expected-face (cadr pair))
-                       (pos (string-match (regexp-quote branch) content)))
+                       (pos (string-match label content)))
                   (should pos)
                   (should (eq (get-text-property pos 'face content)
                               expected-face)))))))

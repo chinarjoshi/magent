@@ -42,6 +42,11 @@
   "Face for repo headers."
   :group 'magent-faces)
 
+(defface magent-face-branch
+  '((t :inherit magit-branch-local))
+  "Face for branch names."
+  :group 'magent-faces)
+
 ;;; Section types
 
 (defclass magent-repo-section (magit-section) ()
@@ -88,11 +93,11 @@
                     (file-name-nondirectory
                      (directory-file-name (magent-work-dir work))))))
     (magit-insert-section (magent-work-section work)
-      (let* ((face (magent--state-face state))
+      (let* ((state-face (magent--state-face state))
              (recent (magent--format-recent work))
              (heading (concat
-                       (propertize (format "  %-25s" branch) 'face face)
-                       (propertize (format "[%s]" (magent--state-label state)) 'face face)
+                       (propertize (format "  %-25s" branch) 'face 'magent-face-branch)
+                       (propertize (format "[%s]" (magent--state-label state)) 'face state-face)
                        (unless (string-empty-p recent)
                          (format "  %s" recent)))))
         (magit-insert-heading heading))
