@@ -74,13 +74,26 @@ Return plist (:tool NAME :file PATH) or nil."
 (defvar magent--session-works (make-hash-table :test 'equal)
   "Map from session-id to Work struct for live updates.")
 
+(defvar magent--process-buffers (make-hash-table :test 'equal)
+  "Map from session-id to accumulated partial output string.")
+
 (defun magent--process-filter (session-id)
-  "Return a process filter function for SESSION-ID."
+  "Return a process filter function for SESSION-ID.
+Buffers partial lines across filter invocations."
   (lambda (_proc output)
-    (let ((lines (split-string output "\n" t)))
-      (dolist (line lines)
-        (when-let ((event (magent--parse-jsonl-line line)))
-          (magent--handle-event session-id event))))))
+    (let* ((prev (gethash session-id magent--process-buffers ""))
+           (combined (concat prev output))
+           (lines (split-string combined "\n"))
+           ;; Last element is either "" (if output ended with \n) or a partial line
+           (partial (car (last lines)))
+           (complete (butlast lines)))
+      ;; Store any partial line for next invocation
+      (puthash session-id partial magent--process-buffers)
+      ;; Process complete lines
+      (dolist (line complete)
+        (unless (string-empty-p line)
+          (when-let ((event (magent--parse-jsonl-line line)))
+            (magent--handle-event session-id event)))))))
 
 (defun magent--handle-event (session-id event)
   "Update Work state based on EVENT from SESSION-ID."
@@ -106,17 +119,31 @@ Return plist (:tool NAME :file PATH) or nil."
         (let ((result (alist-get 'result event)))
           (when (stringp result)
             (push (truncate-string-to-width result 80) (magent-work-recent work))))))
-      ;; Trigger UI refresh if buffer exists
-      (when-let ((buf (get-buffer "*magent*")))
-        (with-current-buffer buf
-          (when (fboundp 'magent-refresh-buffer)
-            (magent-refresh-buffer)))))))
+      ;; Trigger UI refresh (coalesced via timer)
+      (magent--schedule-refresh))))
+
+(defvar magent--refresh-timer nil
+  "Timer for coalescing buffer refreshes.")
+
+(defun magent--schedule-refresh ()
+  "Schedule a buffer refresh, coalescing rapid updates."
+  (when magent--refresh-timer
+    (cancel-timer magent--refresh-timer))
+  (setq magent--refresh-timer
+        (run-with-idle-timer 0.1 nil
+                             (lambda ()
+                               (setq magent--refresh-timer nil)
+                               (when-let ((buf (get-buffer "*magent*")))
+                                 (with-current-buffer buf
+                                   (when (fboundp 'magent-refresh)
+                                     (magent-refresh))))))))
 
 (defun magent--process-sentinel (session-id)
   "Return a process sentinel for SESSION-ID."
   (lambda (_proc event)
     (when (string-match-p "\\(finished\\|exited\\|killed\\)" event)
       (remhash session-id magent--processes)
+      (remhash session-id magent--process-buffers)
       (when-let ((work (gethash session-id magent--session-works)))
         (unless (eq (magent-work-state work) 'done)
           (setf (magent-work-state work) 'needs-input))))))

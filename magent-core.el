@@ -40,22 +40,18 @@
   "Return the git repo root for DIR, or nil."
   (when (file-directory-p dir)
     (let ((default-directory dir))
-      (condition-case nil
-          (file-name-as-directory
-           (string-trim
-            (shell-command-to-string "git rev-parse --show-toplevel")))
-        (error nil)))))
+      (with-temp-buffer
+        (when (zerop (call-process "git" nil t nil "rev-parse" "--show-toplevel"))
+          (file-name-as-directory (string-trim (buffer-string))))))))
 
 (defun magent--git-branch (dir)
   "Return the current git branch for DIR, or nil."
   (when (file-directory-p dir)
     (let ((default-directory dir))
-      (condition-case nil
-          (let ((branch (string-trim
-                         (shell-command-to-string
-                          "git rev-parse --abbrev-ref HEAD"))))
-            (unless (string-empty-p branch) branch))
-        (error nil)))))
+      (with-temp-buffer
+        (when (zerop (call-process "git" nil t nil "rev-parse" "--abbrev-ref" "HEAD"))
+          (let ((branch (string-trim (buffer-string))))
+            (unless (string-empty-p branch) branch)))))))
 
 ;; State predicates
 
