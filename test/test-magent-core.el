@@ -104,4 +104,50 @@
           (should (= (magent-count-todos-in-file tmp) 3)))
       (delete-file tmp))))
 
+(ert-deftest magent-git-repo-root-non-git ()
+  "git-repo-root should return nil for a directory that is not a git repo."
+  (let ((tmp (file-truename (make-temp-file "magent-non-git" t))))
+    (unwind-protect
+        (should (null (magent--git-repo-root tmp)))
+      (delete-directory tmp t))))
+
+(ert-deftest magent-count-todos-next-waiting ()
+  "Should count NEXT and WAITING keywords in addition to TODO."
+  (let ((tmp (make-temp-file "magent-org" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "* TODO First task\n")
+            (insert "* NEXT Second task\n")
+            (insert "* WAITING Third task\n")
+            (insert "* DONE Completed task\n")
+            (insert "* Not a todo\n"))
+          (should (= (magent-count-todos-in-file tmp) 3)))
+      (delete-file tmp))))
+
+(ert-deftest magent-state-load-corrupted ()
+  "Loading a corrupted state file should return nil, not error."
+  (let* ((state-file (make-temp-file "magent-state" nil ".el"))
+         (magent-state-file state-file))
+    (unwind-protect
+        (progn
+          (with-temp-file state-file
+            (insert "this is not valid lisp data !@#$%"))
+          (should (null (magent-state-load))))
+      (delete-file state-file))))
+
+(ert-deftest magent-group-by-repo-no-repo ()
+  "Works with nil repo should group under \"unknown\"."
+  (let ((works (list (magent-work--internal-create
+                      :dir "/tmp/a" :repo nil :purpose "x")
+                     (magent-work--internal-create
+                      :dir "/tmp/b" :repo nil :purpose "y")
+                     (magent-work--internal-create
+                      :dir "/tmp/c" :repo "/real/" :purpose "z"))))
+    (let ((groups (magent-group-by-repo works)))
+      (should (assoc "unknown" groups))
+      (should (= (length (cdr (assoc "unknown" groups))) 2))
+      (should (assoc "/real/" groups))
+      (should (= (length (cdr (assoc "/real/" groups))) 1)))))
+
 ;;; test/test-magent-core.el ends here

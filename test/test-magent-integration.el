@@ -54,4 +54,92 @@
         (kill-buffer "*magent*"))
       (delete-file magent-state-file))))
 
+(ert-deftest magent-buffer-state-faces ()
+  "Each work state should render with the correct face."
+  (let* ((magent-state-file (make-temp-file "magent-state" nil ".el"))
+         (magent--works
+          (list (magent-work--internal-create
+                 :dir "/tmp/wt1" :repo "/tmp/repo/"
+                 :branch "feat/working" :purpose "test"
+                 :state 'working)
+                (magent-work--internal-create
+                 :dir "/tmp/wt2" :repo "/tmp/repo/"
+                 :branch "feat/needs-input" :purpose "test"
+                 :state 'needs-input)
+                (magent-work--internal-create
+                 :dir "/tmp/wt3" :repo "/tmp/repo/"
+                 :branch "feat/idle" :purpose "test"
+                 :state 'idle)
+                (magent-work--internal-create
+                 :dir "/tmp/wt4" :repo "/tmp/repo/"
+                 :branch "feat/done" :purpose "test"
+                 :state 'done))))
+    (unwind-protect
+        (progn
+          (save-window-excursion
+            (magent))
+          (with-current-buffer "*magent*"
+            (let ((content (buffer-string)))
+              ;; Find each branch in buffer and check its face
+              (dolist (pair '(("feat/working" magent-face-working)
+                              ("feat/needs-input" magent-face-needs-input)
+                              ("feat/idle" magent-face-idle)
+                              ("feat/done" magent-face-done)))
+                (let* ((branch (car pair))
+                       (expected-face (cadr pair))
+                       (pos (string-match (regexp-quote branch) content)))
+                  (should pos)
+                  (should (eq (get-text-property pos 'face content)
+                              expected-face)))))))
+      (when (get-buffer "*magent*")
+        (kill-buffer "*magent*"))
+      (delete-file magent-state-file))))
+
+(ert-deftest magent-resume-repo-section ()
+  "Resuming on a repo section should resume all idle works with session-ids."
+  (let* ((magent-state-file (make-temp-file "magent-state" nil ".el"))
+         (magent--session-works (make-hash-table :test 'equal))
+         (resumed-ids nil)
+         (magent--works
+          (list (magent-work--internal-create
+                 :dir "/tmp/wt1" :repo "/tmp/repo/"
+                 :branch "feat/a" :purpose "A"
+                 :state 'idle :session-id "sess-a")
+                (magent-work--internal-create
+                 :dir "/tmp/wt2" :repo "/tmp/repo/"
+                 :branch "feat/b" :purpose "B"
+                 :state 'idle :session-id "sess-b")
+                (magent-work--internal-create
+                 :dir "/tmp/wt3" :repo "/tmp/repo/"
+                 :branch "feat/c" :purpose "C"
+                 :state 'working :session-id "sess-c"))))
+    ;; Register works in session-works for backend-resume
+    (dolist (w magent--works)
+      (puthash (magent-work-session-id w) w magent--session-works))
+    (unwind-protect
+        (cl-letf (((symbol-function 'magent-backend-resume)
+                   (lambda (sid) (push sid resumed-ids) sid)))
+          (save-window-excursion
+            (magent))
+          (with-current-buffer "*magent*"
+            ;; Move point to the repo section header
+            (goto-char (point-min))
+            (re-search-forward "repo")
+            ;; Call resume on the repo section
+            (magent-resume)
+            ;; The 2 idle works should now be working
+            (should (eq (magent-work-state (nth 0 magent--works)) 'working))
+            (should (eq (magent-work-state (nth 1 magent--works)) 'working))
+            ;; The already-working one should stay working
+            (should (eq (magent-work-state (nth 2 magent--works)) 'working))
+            ;; Backend-resume should have been called for the 2 idle ones
+            (should (= (length resumed-ids) 2))
+            (should (member "sess-a" resumed-ids))
+            (should (member "sess-b" resumed-ids))
+            ;; The working one should NOT have been resumed
+            (should-not (member "sess-c" resumed-ids))))
+      (when (get-buffer "*magent*")
+        (kill-buffer "*magent*"))
+      (delete-file magent-state-file))))
+
 ;;; test/test-magent-integration.el ends here
