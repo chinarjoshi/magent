@@ -139,27 +139,44 @@
 
 ;;; Mode and keymap
 
+(defvar magent-bindings
+  '(("Navigation"
+     ("TAB"   magit-section-toggle      "Toggle section")
+     ("S-TAB" magit-section-toggle-children "Toggle all sections")
+     ("n"     magit-section-forward      "Next section")
+     ("p"     magit-section-backward     "Previous section"))
+    ("Actions"
+     ("RET"   magent-visit               "Visit (agent output or file)")
+     ("i"     magent-send-input          "Send input to agent")
+     ("r"     magent-resume              "Resume (work or all in repo)")
+     ("k"     magent-kill-agent          "Kill agent session")
+     ("D"     magent-mark-done           "Mark done / archive"))
+    ("Git"
+     ("c"     magent-tell-commit         "Tell agent to commit")
+     ("P"     magent-tell-pr             "Tell agent to open PR")
+     ("d"     magent-diff                "Diff (magit-diff in worktree)")
+     ("f"     magent-fetch               "Fetch in worktree"))
+    ("Tools"
+     ("!"     magent-shell-command       "Shell command in worktree")
+     ("$"     magent-show-process        "Show agent process buffer")
+     ("l"     magent-event-log           "Agent event log")
+     ("b"     magent-browse-backlog      "Browse backlog org files"))
+    ("Global"
+     ("N"     magent-new-work            "New work")
+     ("g"     magent-refresh             "Refresh")
+     ("?"     magent-help                "This help")))
+  "Magent keybinding definitions. Each group is (HEADING (KEY COMMAND DESC)...).")
+
 (defvar magent-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map magit-section-mode-map)
-    ;; Refresh
-    (define-key map (kbd "g") #'magent-refresh)
-    ;; Actions on Work at point
-    (define-key map (kbd "RET") #'magent-visit)
-    (define-key map (kbd "$") #'magent-show-process)
-    (define-key map (kbd "!") #'magent-shell-command)
-    (define-key map (kbd "c") #'magent-tell-commit)
-    (define-key map (kbd "P") #'magent-tell-pr)
-    (define-key map (kbd "d") #'magent-diff)
-    (define-key map (kbd "k") #'magent-kill-agent)
-    (define-key map (kbd "r") #'magent-resume)
-    (define-key map (kbd "b") #'magent-browse-backlog)
-    (define-key map (kbd "l") #'magent-event-log)
-    (define-key map (kbd "f") #'magent-fetch)
-    (define-key map (kbd "i") #'magent-send-input)
-    (define-key map (kbd "N") #'magent-new-work)
-    (define-key map (kbd "D") #'magent-mark-done)
-    (define-key map (kbd "?") #'magent-help)
+    (dolist (group magent-bindings)
+      (dolist (binding (cdr group))
+        (let ((key (car binding))
+              (cmd (cadr binding)))
+          ;; Skip bindings already in parent map (TAB, S-TAB, n, p)
+          (unless (lookup-key magit-section-mode-map (kbd key))
+            (define-key map (kbd key) cmd)))))
     map)
   "Keymap for `magent-mode'.")
 
@@ -377,37 +394,18 @@ On a repo section, resume all idle Works under it."
     (magent-refresh)))
 
 (defun magent-help ()
-  "Show magent keybindings."
+  "Show magent keybindings, generated from `magent-bindings'."
   (interactive)
   (let ((buf (get-buffer-create "*magent-help*")))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert "Magent keybindings\n\n"
-                "Navigation\n"
-                "  TAB       Toggle section\n"
-                "  S-TAB     Toggle all sections\n"
-                "  n / p     Next / previous section\n\n"
-                "Actions on work at point\n"
-                "  RET       Visit (agent output or file)\n"
-                "  i         Send input to agent\n"
-                "  r         Resume (work or all in repo)\n"
-                "  k         Kill agent session\n"
-                "  D         Mark done / archive\n\n"
-                "Git integration\n"
-                "  c         Tell agent to commit\n"
-                "  P         Tell agent to open PR\n"
-                "  d         Diff (magit-diff in worktree)\n"
-                "  f         Fetch in worktree\n\n"
-                "Tools\n"
-                "  !         Shell command in worktree\n"
-                "  $         Show agent process buffer\n"
-                "  l         Agent event log\n"
-                "  b         Browse backlog org files\n\n"
-                "Global\n"
-                "  N         New work\n"
-                "  g         Refresh\n"
-                "  ?         This help\n"))
+        (insert "Magent keybindings\n\n")
+        (dolist (group magent-bindings)
+          (insert (car group) "\n")
+          (dolist (binding (cdr group))
+            (insert (format "  %-9s %s\n" (car binding) (caddr binding))))
+          (insert "\n")))
       (special-mode)
       (goto-char (point-min)))
     (display-buffer buf)))
