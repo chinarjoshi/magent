@@ -17,34 +17,67 @@
   "Faces for magent."
   :group 'magent)
 
-(defface magent-face-working
-  '((t :inherit default))
-  "Face for Work items in working state."
+;; Branch faces — color tells you the state at a glance
+(defface magent-face-branch-working
+  '((t :inherit magit-branch-remote :weight normal))
+  "Face for branch names of working agents."
   :group 'magent-faces)
 
-(defface magent-face-needs-input
+(defface magent-face-branch-needs-input
   '((t :inherit warning :weight bold))
-  "Face for Work items that need user input."
+  "Face for branch names of agents needing input."
   :group 'magent-faces)
 
-(defface magent-face-idle
+(defface magent-face-branch-idle
   '((t :inherit shadow))
-  "Face for idle Work items."
+  "Face for branch names of idle agents."
   :group 'magent-faces)
 
-(defface magent-face-done
+(defface magent-face-branch-done
   '((t :inherit success))
-  "Face for completed Work items."
+  "Face for branch names of completed work."
   :group 'magent-faces)
 
+;; Status badge faces
+(defface magent-face-status-working
+  '((((class color) (background dark)) :foreground "#61afef")
+    (((class color) (background light)) :foreground "#4078f2")
+    (t :inherit default))
+  "Face for [working] status badge."
+  :group 'magent-faces)
+
+(defface magent-face-status-needs-input
+  '((((class color) (background dark)) :foreground "#e5c07b" :weight bold)
+    (((class color) (background light)) :foreground "#986801" :weight bold)
+    (t :inherit warning :weight bold))
+  "Face for [needs input] status badge."
+  :group 'magent-faces)
+
+(defface magent-face-status-idle
+  '((t :inherit shadow))
+  "Face for [idle] status badge."
+  :group 'magent-faces)
+
+(defface magent-face-status-done
+  '((t :inherit success :weight normal))
+  "Face for [done] status badge."
+  :group 'magent-faces)
+
+;; Repo face — distinct from branch
 (defface magent-face-repo
-  '((t :inherit magit-section-heading))
-  "Face for repo headers."
+  '((t :inherit magit-section-heading :weight bold))
+  "Face for repo names."
   :group 'magent-faces)
 
-(defface magent-face-branch
-  '((t :inherit magit-branch-local))
-  "Face for branch names."
+;; Archive faces
+(defface magent-face-archive-repo
+  '((t :inherit shadow))
+  "Face for repo names in archive."
+  :group 'magent-faces)
+
+(defface magent-face-archive-branch
+  '((t :inherit shadow :slant italic))
+  "Face for branch names in archive."
   :group 'magent-faces)
 
 ;;; Section types
@@ -58,18 +91,33 @@
 (defclass magent-file-section (magit-section) ()
   "Section for a file within a Work item.")
 
+(defclass magent-active-section (magit-section) ()
+  "Top-level section for active work.")
+
+(defclass magent-archive-section (magit-section) ()
+  "Top-level section for archived/done work.")
+
 ;;; Helpers
 
-(defun magent--state-face (state)
-  "Return the face for STATE symbol."
+(defun magent--branch-face (state)
+  "Return the branch face for STATE."
   (pcase state
-    ('working 'magent-face-working)
-    ('needs-input 'magent-face-needs-input)
-    ('idle 'magent-face-idle)
-    ('done 'magent-face-done)
-    (_ 'default)))
+    ('working 'magent-face-branch-working)
+    ('needs-input 'magent-face-branch-needs-input)
+    ('idle 'magent-face-branch-idle)
+    ('done 'magent-face-branch-done)
+    (_ 'shadow)))
 
-(defun magent--state-label (state)
+(defun magent--status-face (state)
+  "Return the status badge face for STATE."
+  (pcase state
+    ('working 'magent-face-status-working)
+    ('needs-input 'magent-face-status-needs-input)
+    ('idle 'magent-face-status-idle)
+    ('done 'magent-face-status-done)
+    (_ 'shadow)))
+
+(defun magent--status-label (state)
   "Return display label for STATE."
   (pcase state
     ('working "working")
@@ -78,78 +126,121 @@
     ('done "done")
     (_ "unknown")))
 
+(defun magent--repo-name (repo)
+  "Return just the directory name from REPO path."
+  (if (or (null repo) (equal repo "unknown"))
+      "unknown"
+    (file-name-nondirectory (directory-file-name repo))))
+
 (defun magent--format-recent (work)
   "Format the most recent action for WORK."
   (if-let ((r (car (magent-work-recent work))))
       r
     ""))
 
-;;; Section insertion
-
 (defun magent--purpose-oneliner (purpose)
   "Return a clean one-liner from PURPOSE string, or nil."
   (when (and purpose (not (string-empty-p purpose)))
     (let* ((clean (replace-regexp-in-string
-                   "<[^>]+>" "" purpose)) ; strip XML tags
+                   "<[^>]+>" "" purpose))
            (clean (replace-regexp-in-string
-                   "\\`[ \t\n]+" "" clean)) ; leading whitespace
+                   "\\`[ \t\n]+" "" clean))
            (first-line (car (split-string clean "\n" t))))
       (when (and first-line (not (string-empty-p first-line)))
         (truncate-string-to-width first-line 60)))))
 
-(defun magent--insert-work (work)
-  "Insert a magit-section for WORK."
-  (let ((state (magent-work-state work))
-        (branch (or (magent-work-branch work)
-                    (file-name-nondirectory
-                     (directory-file-name (magent-work-dir work))))))
-    (magit-insert-section (magent-work-section work t)
-      (let* ((state-face (magent--state-face state))
-             (oneliner (magent--purpose-oneliner (magent-work-purpose work)))
-             (heading (concat
-                       (propertize (format "  %-25s" branch)
-                                  'font-lock-face 'magent-face-branch)
-                       (propertize (format "[%s]" (magent--state-label state))
-                                  'font-lock-face state-face)
-                       (when oneliner
-                         (propertize (format "  %s" oneliner)
-                                    'font-lock-face 'shadow)))))
-        (magit-insert-heading heading))
-      ;; Foldable body content (visible on TAB)
-      (let ((dir (abbreviate-file-name (magent-work-dir work)))
-            (purpose (magent-work-purpose work)))
-        (insert (propertize (format "    %s\n" dir) 'font-lock-face 'shadow))
-        (when (magent-work-session-id work)
-          (insert (propertize (format "    session: %s\n"
-                                      (magent-work-session-id work))
-                              'font-lock-face 'shadow)))
-        (when (and purpose (not (string-empty-p purpose)))
-          (let ((clean (replace-regexp-in-string "<[^>]+>" "" purpose)))
-            (insert (propertize (format "    %s\n"
-                                        (truncate-string-to-width clean 120))
-                                'font-lock-face 'shadow)))))
-      ;; Files being touched
-      (when (magent-work-files work)
-        (dolist (file (magent-work-files work))
-          (magit-insert-section (magent-file-section file)
-            (insert (format "    %s\n" file)))))
-      ;; PR info
-      (when (magent-work-pr work)
-        (insert (format "    PR: %s\n" (magent-work-pr work)))))))
+(defun magent--max-branch-width (works)
+  "Return the max branch name length across all WORKS."
+  (let ((max-w 0))
+    (dolist (w works)
+      (let* ((branch (or (magent-work-branch w)
+                         (file-name-nondirectory
+                          (directory-file-name (magent-work-dir w)))))
+             (len (length branch)))
+        (when (> len max-w) (setq max-w len))))
+    max-w))
 
-(defun magent--insert-repo-section (repo works)
-  "Insert a repo section for REPO with WORKS."
+;;; Section insertion
+
+(defun magent--insert-work (work col)
+  "Insert a magit-section for WORK with status at column COL."
+  (let* ((state (magent-work-state work))
+         (branch (or (magent-work-branch work)
+                     (file-name-nondirectory
+                      (directory-file-name (magent-work-dir work)))))
+         (oneliner (magent--purpose-oneliner (magent-work-purpose work)))
+         (pad (make-string (max 1 (- col (length branch))) ?\s)))
+    (magit-insert-section (magent-work-section work t)
+      (magit-insert-heading
+        (concat
+         (propertize (format "  %s" branch) 'font-lock-face (magent--branch-face state))
+         pad
+         (propertize (format "[%s]" (magent--status-label state))
+                     'font-lock-face (magent--status-face state))
+         (when oneliner
+           (propertize (format "  %s" oneliner) 'font-lock-face 'shadow))))
+      ;; Foldable body — first level: dir + last prompt (1-2 lines)
+      (let ((dir (abbreviate-file-name (magent-work-dir work)))
+            (purpose (magent-work-purpose work))
+            (output (magent-work-last-output work)))
+        (insert (propertize (format "    %s\n" dir) 'font-lock-face 'shadow))
+        ;; Last prompt — max 2 lines
+        (when (and purpose (not (string-empty-p purpose)))
+          (let* ((clean (replace-regexp-in-string "<[^>]+>" "" purpose))
+                 (clean (replace-regexp-in-string "\\`[ \t\n]+" "" clean))
+                 (lines (split-string clean "\n" t))
+                 (display (mapconcat #'identity (seq-take lines 2) "\n    ")))
+            (insert (propertize (format "    > %s\n"
+                                        (truncate-string-to-width display 120))
+                                'font-lock-face 'shadow))))
+        ;; Files
+        (when (magent-work-files work)
+          (dolist (file (magent-work-files work))
+            (magit-insert-section (magent-file-section file)
+              (insert (format "    %s\n" file)))))
+        ;; PR
+        (when (magent-work-pr work)
+          (insert (propertize (format "    PR: %s\n" (magent-work-pr work))
+                              'font-lock-face 'shadow)))
+        ;; Last output — deeper fold
+        (when (and output (not (string-empty-p output)))
+          (magit-insert-section (magit-section 'output t)
+            (magit-insert-heading
+              (propertize "    Agent output" 'font-lock-face 'shadow))
+            (let* ((lines (split-string output "\n"))
+                   (display (mapconcat #'identity (seq-take lines 30) "\n")))
+              (insert (propertize
+                       (replace-regexp-in-string
+                        "^" "      "
+                        (truncate-string-to-width display 2000))
+                       'font-lock-face 'shadow))
+              (insert "\n"))))))))
+
+(defun magent--insert-archive-work (work)
+  "Insert a single archive line for WORK."
+  (magit-insert-section (magent-work-section work)
+    (magit-insert-heading
+      (concat
+       (propertize (format "  %s" (magent--repo-name (magent-work-repo work)))
+                   'font-lock-face 'magent-face-archive-repo)
+       (propertize " - " 'font-lock-face 'shadow)
+       (propertize (or (magent-work-branch work) "?")
+                   'font-lock-face 'magent-face-archive-branch)))))
+
+(defun magent--insert-repo-section (repo works col)
+  "Insert a repo section for REPO with WORKS, status at COL."
   (let ((todo-count (if (file-directory-p repo)
                         (magent-repo-todo-count repo)
-                      0)))
+                      0))
+        (name (magent--repo-name repo)))
     (magit-insert-section (magent-repo-section repo)
       (magit-insert-heading
         (concat
-         (propertize (abbreviate-file-name repo) 'font-lock-face 'magent-face-repo)
+         (propertize name 'font-lock-face 'magent-face-repo)
          (when (> todo-count 0)
-           (format "  %d TODOs" todo-count))))
+           (propertize (format "  %d TODOs" todo-count) 'font-lock-face 'shadow))))
       (dolist (w works)
-        (magent--insert-work w))
+        (magent--insert-work w col))
       (insert "\n"))))
 
 ;;; Buffer state
@@ -160,14 +251,31 @@
 (defun magent-refresh-buffer ()
   "Refresh the *magent* buffer contents."
   (when (derived-mode-p 'magent-mode)
-    (let ((inhibit-read-only t)
-          (groups (magent-group-by-repo magent--works)))
+    (let* ((inhibit-read-only t)
+           (active (seq-filter (lambda (w) (not (magent-work-done-p w))) magent--works))
+           (archive (seq-filter #'magent-work-done-p magent--works))
+           (active-groups (magent-group-by-repo active))
+           ;; Compute column alignment across ALL active works
+           (col (+ 2 (magent--max-branch-width active))))
       (magit-insert-section (magit-status-section)
-        (magit-insert-heading "Magent\n")
-        (if groups
-            (dolist (group groups)
-              (magent--insert-repo-section (car group) (cdr group)))
-          (insert "\n  No active work. Press N to create one.\n"))))))
+        ;; Active section
+        (magit-insert-section (magent-active-section 'active)
+          (magit-insert-heading
+            (propertize (format "Active (%d)" (length active))
+                        'font-lock-face 'magit-section-heading))
+          (if active-groups
+              (dolist (group active-groups)
+                (magent--insert-repo-section (car group) (cdr group) col))
+            (insert "\n  No active work. Press N to create one.\n\n")))
+        ;; Archive section
+        (when archive
+          (magit-insert-section (magent-archive-section 'archive t)
+            (magit-insert-heading
+              (propertize (format "Archive (%d)" (length archive))
+                          'font-lock-face 'magit-section-heading))
+            (dolist (w archive)
+              (magent--insert-archive-work w))
+            (insert "\n")))))))
 
 ;;; Mode and keymap
 
@@ -206,14 +314,13 @@
       (dolist (binding (cdr group))
         (let ((key (car binding))
               (cmd (cadr binding)))
-          ;; Skip keys from parent map and g/n/p (handled by Evil or added later)
           (unless (or (lookup-key magit-section-mode-map (kbd key))
                       (member key '("g" "n" "p")))
             (define-key map (kbd key) cmd)))))
     map)
   "Keymap for `magent-mode'.")
 
-;; Bind g/n/p for non-Evil users after keymap is defined
+;; Bind g/n/p for non-Evil users
 (unless (featurep 'evil)
   (define-key magent-mode-map (kbd "g") #'magent-refresh)
   (define-key magent-mode-map (kbd "n") #'magit-section-forward)
@@ -225,7 +332,7 @@
   (setq-local revert-buffer-function #'magent--revert-buffer)
   (setq buffer-read-only t))
 
-;; Evil integration — bind in normal state so Evil doesn't shadow them
+;; Evil integration
 (with-eval-after-load 'evil
   (evil-set-initial-state 'magent-mode 'normal)
   (let ((map (evil-get-auxiliary-keymap magent-mode-map 'normal t t)))
@@ -233,29 +340,23 @@
       (dolist (binding (cdr group))
         (let ((key (car binding))
               (cmd (cadr binding)))
-          ;; Skip g (conflicts with gg) and n/p (use j/k in Evil)
           (unless (member key '("g" "n" "p"))
             (define-key map (kbd key) cmd))))))
-  ;; Evil-native bindings
   (evil-define-key* 'normal magent-mode-map
     "q" #'quit-window
-    ;; Section navigation (j/k instead of n/p)
     "j" #'magit-section-forward
     "k" #'magit-section-backward
     "J" #'magit-section-forward-sibling
     "K" #'magit-section-backward-sibling
     (kbd "C-j") #'magit-section-forward
     (kbd "C-k") #'magit-section-backward
-    ;; Standard Evil motion
     "gg" #'evil-goto-first-line
     "G" #'evil-goto-line
     (kbd "C-d") #'evil-scroll-down
     (kbd "C-u") #'evil-scroll-up
-    ;; Search
     "/" #'evil-search-forward
     "n" #'evil-search-next
     "N" #'evil-search-previous
-    ;; Refresh under g prefix (like evil-collection-magit)
     "gr" #'magent-refresh
     "gR" #'magent-refresh))
 
@@ -372,7 +473,10 @@ On a repo section, browse backlog."
   (interactive)
   (when-let ((work (magent--work-at-point)))
     (let ((default-directory (magent-work-dir work)))
-      (magit-diff-unstaged))))
+      (if (fboundp 'magit-diff-unstaged)
+          (magit-diff-unstaged)
+        (message "Running git diff...")
+        (shell-command "git diff")))))
 
 (defun magent-kill-agent ()
   "Kill the agent session for Work at point."
@@ -406,7 +510,7 @@ On a repo section, resume all idle Works under it."
             (progn
               (message "Resumed %d agent%s." resumed (if (= resumed 1) "" "s"))
               (magent-refresh))
-          (message "No idle sessions in %s." (abbreviate-file-name repo)))))
+          (message "No idle sessions in %s." (magent--repo-name repo)))))
      (t
       (when-let* ((work (magent--work-at-point))
                   (sid (magent-work-session-id work)))

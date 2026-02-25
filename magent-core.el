@@ -24,7 +24,8 @@
   (session-id nil :type (or string null) :documentation "Backend session ID.")
   (pr nil :type (or string null) :documentation "PR URL.")
   (files nil :type list :documentation "Files the agent is currently touching.")
-  (recent nil :type list :documentation "Recent actions/tool calls."))
+  (recent nil :type list :documentation "Recent actions/tool calls.")
+  (last-output nil :type (or string null) :documentation "Last assistant response text."))
 
 (defun magent-work-create (&rest args)
   "Create a Work, deriving repo and branch from :dir."
@@ -173,33 +174,59 @@
   :type 'directory
   :group 'magent)
 
+(defun magent--extract-text-content (message)
+  "Extract text content from a MESSAGE alist's content field."
+  (let ((content (alist-get 'content (alist-get 'message message))))
+    (cond
+     ((stringp content) content)
+     ((and (vectorp content))
+      (mapconcat (lambda (block)
+                   (when (equal (alist-get 'type block) "text")
+                     (alist-get 'text block)))
+                 content ""))
+     ((listp content)
+      (mapconcat (lambda (block)
+                   (when (equal (alist-get 'type block) "text")
+                     (alist-get 'text block)))
+                 content ""))
+     (t nil))))
+
 (defun magent--session-metadata (jsonl-file)
-  "Extract metadata from the first user message in JSONL-FILE.
-Returns alist with session-id, cwd, branch, timestamp, prompt."
+  "Extract metadata from JSONL-FILE.
+Returns alist with session-id, cwd, branch, timestamp, prompt, last-output."
   (condition-case nil
       (with-temp-buffer
-        (insert-file-contents jsonl-file nil 0 8192) ; read first 8K
+        (insert-file-contents jsonl-file)
         (goto-char (point-min))
-        (let (result)
-          (while (and (not result) (not (eobp)))
+        (let (first-user last-assistant last-user)
+          (while (not (eobp))
             (let* ((line (buffer-substring (line-beginning-position)
                                            (line-end-position)))
                    (msg (condition-case nil
                             (json-read-from-string line)
                           (error nil))))
-              (when (and msg (equal (alist-get 'type msg) "user"))
-                (setq result
-                      (list (cons 'session-id (alist-get 'sessionId msg))
-                            (cons 'cwd (alist-get 'cwd msg))
-                            (cons 'branch (alist-get 'gitBranch msg))
-                            (cons 'timestamp (alist-get 'timestamp msg))
-                            (cons 'prompt
-                                  (let ((content (alist-get 'content
-                                                            (alist-get 'message msg))))
-                                    (when (stringp content)
-                                      (truncate-string-to-width content 200))))))))
+              (when msg
+                (let ((type (alist-get 'type msg)))
+                  (when (equal type "user")
+                    (unless first-user (setq first-user msg))
+                    (setq last-user msg))
+                  (when (equal type "assistant")
+                    (setq last-assistant msg)))))
             (forward-line 1))
-          result))
+          (when first-user
+            (let ((last-prompt (magent--extract-text-content
+                                (or last-user first-user)))
+                  (last-output (magent--extract-text-content last-assistant)))
+              (list (cons 'session-id (alist-get 'sessionId first-user))
+                    (cons 'cwd (alist-get 'cwd first-user))
+                    (cons 'branch (alist-get 'gitBranch first-user))
+                    (cons 'timestamp (alist-get 'timestamp first-user))
+                    (cons 'prompt
+                          (when (stringp last-prompt)
+                            (truncate-string-to-width last-prompt 200)))
+                    (cons 'last-output
+                          (when (stringp last-output)
+                            last-output)))))))
     (error nil)))
 
 (defun magent-discover-sessions (&optional filter-dirs)
@@ -245,7 +272,8 @@ Returns list of Work structs (state idle, with session-id)."
                                    :branch (or branch (magent--git-branch cwd))
                                    :purpose (or (alist-get 'prompt meta) "")
                                    :state 'idle
-                                   :session-id sid))
+                                   :session-id sid
+                                   :last-output (alist-get 'last-output meta)))
                             works))))))))))
     ;; Sort by recency (most recent first), then strip timestamps
     (mapcar #'cdr

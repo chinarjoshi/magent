@@ -17,7 +17,7 @@
           (with-current-buffer "*magent*"
             (should (equal (buffer-name) "*magent*"))
             (should (derived-mode-p 'magent-mode))
-            (should (string-match-p "Magent" (buffer-string)))
+            (should (string-match-p "Active" (buffer-string)))
             (should (string-match-p "No active work" (buffer-string)))))
       (when (get-buffer "*magent*")
         (kill-buffer "*magent*"))
@@ -45,12 +45,14 @@
             (magent))
           (with-current-buffer "*magent*"
             (let ((content (buffer-string)))
+              ;; Active section has repo-a works
               (should (string-match-p "repo-a" content))
-              (should (string-match-p "repo-b" content))
               (should (string-match-p "feat/alpha" content))
               (should (string-match-p "\\[working\\]" content))
               (should (string-match-p "\\[needs input\\]" content))
-              (should (string-match-p "\\[done\\]" content)))))
+              ;; Archive section has the done work
+              (should (string-match-p "Archive" content))
+              (should (string-match-p "feat/gamma" content)))))
       (when (get-buffer "*magent*")
         (kill-buffer "*magent*"))
       (delete-file magent-state-file))))
@@ -81,18 +83,20 @@
             (magent))
           (with-current-buffer "*magent*"
             (let ((content (buffer-string)))
-              ;; Branch names should all have magent-face-branch
-              (dolist (branch '("feat/working" "feat/needs-input"
-                                "feat/idle" "feat/done"))
-                (let ((pos (string-match (regexp-quote branch) content)))
+              ;; Branch names should have state-specific branch faces
+              (dolist (pair '(("feat/working" magent-face-branch-working)
+                              ("feat/needs-input" magent-face-branch-needs-input)
+                              ("feat/idle" magent-face-branch-idle)))
+                (let* ((branch (car pair))
+                       (expected-face (cadr pair))
+                       (pos (string-match (regexp-quote branch) content)))
                   (should pos)
                   (should (eq (get-text-property pos 'font-lock-face content)
-                              'magent-face-branch))))
-              ;; Status badges should have their state face
-              (dolist (pair '(("\\[working\\]" magent-face-working)
-                              ("\\[needs input\\]" magent-face-needs-input)
-                              ("\\[idle\\]" magent-face-idle)
-                              ("\\[done\\]" magent-face-done)))
+                              expected-face))))
+              ;; Status badges should have state-specific status faces
+              (dolist (pair '(("\\[working\\]" magent-face-status-working)
+                              ("\\[needs input\\]" magent-face-status-needs-input)
+                              ("\\[idle\\]" magent-face-status-idle)))
                 (let* ((label (car pair))
                        (expected-face (cadr pair))
                        (pos (string-match label content)))
