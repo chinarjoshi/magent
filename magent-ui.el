@@ -86,35 +86,48 @@
 
 ;;; Section insertion
 
+(defun magent--purpose-oneliner (purpose)
+  "Return a clean one-liner from PURPOSE string, or nil."
+  (when (and purpose (not (string-empty-p purpose)))
+    (let* ((clean (replace-regexp-in-string
+                   "<[^>]+>" "" purpose)) ; strip XML tags
+           (clean (replace-regexp-in-string
+                   "\\`[ \t\n]+" "" clean)) ; leading whitespace
+           (first-line (car (split-string clean "\n" t))))
+      (when (and first-line (not (string-empty-p first-line)))
+        (truncate-string-to-width first-line 60)))))
+
 (defun magent--insert-work (work)
   "Insert a magit-section for WORK."
   (let ((state (magent-work-state work))
         (branch (or (magent-work-branch work)
                     (file-name-nondirectory
                      (directory-file-name (magent-work-dir work))))))
-    (magit-insert-section (magent-work-section work)
+    (magit-insert-section (magent-work-section work t)
       (let* ((state-face (magent--state-face state))
-             (recent (magent--format-recent work))
+             (oneliner (magent--purpose-oneliner (magent-work-purpose work)))
              (heading (concat
-                       (propertize (format "  %-25s" branch) 'font-lock-face 'magent-face-branch)
-                       (propertize (format "[%s]" (magent--state-label state)) 'font-lock-face state-face)
-                       (unless (string-empty-p recent)
-                         (format "  %s" recent)))))
+                       (propertize (format "  %-25s" branch)
+                                  'font-lock-face 'magent-face-branch)
+                       (propertize (format "[%s]" (magent--state-label state))
+                                  'font-lock-face state-face)
+                       (when oneliner
+                         (propertize (format "  %s" oneliner)
+                                    'font-lock-face 'shadow)))))
         (magit-insert-heading heading))
-      ;; Foldable body content
-      (let ((purpose (magent-work-purpose work))
-            (dir (abbreviate-file-name (magent-work-dir work))))
-        ;; Always show directory
+      ;; Foldable body content (visible on TAB)
+      (let ((dir (abbreviate-file-name (magent-work-dir work)))
+            (purpose (magent-work-purpose work)))
         (insert (propertize (format "    %s\n" dir) 'font-lock-face 'shadow))
-        ;; Show purpose if non-empty
-        (when (and purpose (not (string-empty-p purpose)))
-          (let ((display (truncate-string-to-width purpose 80)))
-            (insert (propertize (format "    %s\n" display) 'font-lock-face 'shadow))))
-        ;; Session ID
         (when (magent-work-session-id work)
           (insert (propertize (format "    session: %s\n"
                                       (magent-work-session-id work))
-                              'font-lock-face 'shadow))))
+                              'font-lock-face 'shadow)))
+        (when (and purpose (not (string-empty-p purpose)))
+          (let ((clean (replace-regexp-in-string "<[^>]+>" "" purpose)))
+            (insert (propertize (format "    %s\n"
+                                        (truncate-string-to-width clean 120))
+                                'font-lock-face 'shadow)))))
       ;; Files being touched
       (when (magent-work-files work)
         (dolist (file (magent-work-files work))
@@ -193,10 +206,18 @@
       (dolist (binding (cdr group))
         (let ((key (car binding))
               (cmd (cadr binding)))
-          (unless (lookup-key magit-section-mode-map (kbd key))
+          ;; Skip keys from parent map and g/n/p (handled by Evil or added later)
+          (unless (or (lookup-key magit-section-mode-map (kbd key))
+                      (member key '("g" "n" "p")))
             (define-key map (kbd key) cmd)))))
     map)
   "Keymap for `magent-mode'.")
+
+;; Bind g/n/p for non-Evil users after keymap is defined
+(unless (featurep 'evil)
+  (define-key magent-mode-map (kbd "g") #'magent-refresh)
+  (define-key magent-mode-map (kbd "n") #'magit-section-forward)
+  (define-key magent-mode-map (kbd "p") #'magit-section-backward))
 
 (define-derived-mode magent-mode magit-section-mode "Magent"
   "Major mode for the magent dashboard."
@@ -212,16 +233,31 @@
       (dolist (binding (cdr group))
         (let ((key (car binding))
               (cmd (cadr binding)))
-          (define-key map (kbd key) cmd))))
-    ;; Suppress destructive Evil commands in this buffer
-    (evil-define-key* 'normal magent-mode-map
-      "q" #'quit-window
-      "j" #'magit-section-forward
-      "k" #'magit-section-backward
-      "J" #'magit-section-forward-sibling
-      "K" #'magit-section-backward-sibling
-      (kbd "C-j") #'magit-section-forward
-      (kbd "C-k") #'magit-section-backward)))
+          ;; Skip g (conflicts with gg) and n/p (use j/k in Evil)
+          (unless (member key '("g" "n" "p"))
+            (define-key map (kbd key) cmd))))))
+  ;; Evil-native bindings
+  (evil-define-key* 'normal magent-mode-map
+    "q" #'quit-window
+    ;; Section navigation (j/k instead of n/p)
+    "j" #'magit-section-forward
+    "k" #'magit-section-backward
+    "J" #'magit-section-forward-sibling
+    "K" #'magit-section-backward-sibling
+    (kbd "C-j") #'magit-section-forward
+    (kbd "C-k") #'magit-section-backward
+    ;; Standard Evil motion
+    "gg" #'evil-goto-first-line
+    "G" #'evil-goto-line
+    (kbd "C-d") #'evil-scroll-down
+    (kbd "C-u") #'evil-scroll-up
+    ;; Search
+    "/" #'evil-search-forward
+    "n" #'evil-search-next
+    "N" #'evil-search-previous
+    ;; Refresh under g prefix (like evil-collection-magit)
+    "gr" #'magent-refresh
+    "gR" #'magent-refresh))
 
 (defun magent--revert-buffer (_ignore-auto _noconfirm)
   "Revert the magent buffer by refreshing."
