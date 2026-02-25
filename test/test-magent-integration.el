@@ -8,7 +8,8 @@
 (ert-deftest magent-buffer-creates ()
   "M-x magent should create the *magent* buffer in magent-mode."
   (let ((magent--works nil)
-        (magent-state-file (make-temp-file "magent-state" nil ".el")))
+        (magent-state-file (make-temp-file "magent-state" nil ".el"))
+        (magent-claude-projects-dir (make-temp-file "magent-proj" t)))
     (unwind-protect
         (progn
           (save-window-excursion

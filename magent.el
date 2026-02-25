@@ -26,6 +26,34 @@
   :group 'tools
   :prefix "magent-")
 
+(defcustom magent-discover-dirs nil
+  "Directories to scan for Claude sessions on startup.
+If nil, scan all projects in `magent-claude-projects-dir'."
+  :type '(repeat directory)
+  :group 'magent)
+
+(defun magent--merge-discovered (existing discovered)
+  "Merge DISCOVERED sessions into EXISTING works list.
+Deduplicates by directory. Existing works take priority.
+Updates session-id on existing idle works if discovered has a newer one."
+  (let ((dirs (make-hash-table :test 'equal)))
+    ;; Index existing by dir
+    (dolist (w existing)
+      (puthash (magent-work-dir w) w dirs))
+    ;; Merge discovered
+    (dolist (w discovered)
+      (let* ((dir (magent-work-dir w))
+             (existing-work (gethash dir dirs)))
+        (if existing-work
+            ;; Update session-id if existing has none
+            (when (and (null (magent-work-session-id existing-work))
+                       (magent-work-session-id w))
+              (setf (magent-work-session-id existing-work)
+                    (magent-work-session-id w)))
+          ;; New work from discovery
+          (puthash dir w dirs))))
+    (hash-table-values dirs)))
+
 ;;;###autoload
 (defun magent ()
   "Open the magent dashboard."
@@ -35,7 +63,10 @@
       (unless (derived-mode-p 'magent-mode)
         (magent-mode))
       (unless magent--works
-        (setq magent--works (or (magent-state-load) nil)))
+        (let ((saved (magent-state-load))
+              (discovered (magent-discover-sessions magent-discover-dirs)))
+          (setq magent--works (magent--merge-discovered
+                               (or saved nil) discovered))))
       (magent-refresh))
     (switch-to-buffer buf)))
 
