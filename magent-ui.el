@@ -19,10 +19,10 @@
 
 ;; Branch faces — color tells you the state at a glance
 (defface magent-face-branch-working
-  '((((class color) (background dark)) :foreground "#61afef")
-    (((class color) (background light)) :foreground "#4078f2")
-    (t :inherit default))
-  "Face for branch names of working agents."
+  '((((class color) (background dark)) :foreground "#3fb950")
+    (((class color) (background light)) :foreground "#1a7f37")
+    (t :inherit success))
+  "Face for branch names of working agents (GitHub Open green)."
   :group 'magent-faces)
 
 (defface magent-face-branch-needs-input
@@ -44,10 +44,10 @@
 
 ;; Status badge faces
 (defface magent-face-status-working
-  '((((class color) (background dark)) :foreground "#61afef")
-    (((class color) (background light)) :foreground "#4078f2")
-    (t :inherit default))
-  "Face for [working] status badge."
+  '((((class color) (background dark)) :foreground "#3fb950")
+    (((class color) (background light)) :foreground "#1a7f37")
+    (t :inherit success))
+  "Face for [working] status badge (GitHub Open green)."
   :group 'magent-faces)
 
 (defface magent-face-status-needs-input
