@@ -25,7 +25,8 @@
   (pr nil :type (or string null) :documentation "PR URL.")
   (files nil :type list :documentation "Files the agent is currently touching.")
   (recent nil :type list :documentation "Recent actions/tool calls.")
-  (last-output nil :type (or string null) :documentation "Last assistant response text."))
+  (last-output nil :type (or string null) :documentation "Last assistant response text.")
+  (start-commit nil :type (or string null) :documentation "Commit SHA when agent work started."))
 
 (defun magent-work-create (&rest args)
   "Create a Work, deriving repo and branch from :dir."
@@ -53,6 +54,14 @@
         (when (zerop (call-process "git" nil t nil "rev-parse" "--abbrev-ref" "HEAD"))
           (let ((branch (string-trim (buffer-string))))
             (unless (string-empty-p branch) branch)))))))
+
+(defun magent--git-head (dir)
+  "Return the current HEAD commit SHA for DIR, or nil."
+  (when (file-directory-p dir)
+    (let ((default-directory dir))
+      (with-temp-buffer
+        (when (zerop (call-process "git" nil t nil "rev-parse" "HEAD"))
+          (string-trim (buffer-string)))))))
 
 ;; State predicates
 
@@ -108,7 +117,8 @@
         :purpose (magent-work-purpose work)
         :state (magent-work-state work)
         :session-id (magent-work-session-id work)
-        :pr (magent-work-pr work)))
+        :pr (magent-work-pr work)
+        :start-commit (magent-work-start-commit work)))
 
 (defun magent--plist-to-work (plist)
   "Deserialize a PLIST to a Work struct."
@@ -119,7 +129,8 @@
                :purpose (plist-get plist :purpose)
                :state (plist-get plist :state)
                :session-id (plist-get plist :session-id)
-               :pr (plist-get plist :pr))))
+               :pr (plist-get plist :pr)
+               :start-commit (plist-get plist :start-commit))))
     ;; Re-derive repo/branch if missing (old state files)
     (when (and (magent-work-dir work)
                (null (magent-work-repo work)))
@@ -223,42 +234,71 @@ Modifies works in place, returns count of newly archived."
                  content ""))
      (t nil))))
 
+(defun magent--read-file-head-and-tail (file head-bytes tail-bytes)
+  "Read first HEAD-BYTES and last TAIL-BYTES of FILE.
+Returns (HEAD-STRING . TAIL-STRING)."
+  (let* ((attrs (file-attributes file))
+         (size (file-attribute-size attrs))
+         (head (with-temp-buffer
+                 (insert-file-contents file nil 0 (min head-bytes size))
+                 (buffer-string)))
+         (tail (if (> size (+ head-bytes tail-bytes))
+                   (with-temp-buffer
+                     (insert-file-contents file nil (- size tail-bytes) size)
+                     (buffer-string))
+                 ;; File small enough that head covers everything
+                 nil)))
+    (cons head tail)))
+
+(defun magent--parse-jsonl-messages (text &optional type-filter)
+  "Parse JSONL TEXT, return messages matching TYPE-FILTER (or all)."
+  (let (results)
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let* ((line (buffer-substring (line-beginning-position)
+                                       (line-end-position)))
+               (msg (condition-case nil
+                        (json-read-from-string line)
+                      (error nil))))
+          (when (and msg (or (null type-filter)
+                             (equal (alist-get 'type msg) type-filter)))
+            (push msg results)))
+        (forward-line 1)))
+    (nreverse results)))
+
 (defun magent--session-metadata (jsonl-file)
   "Extract metadata from JSONL-FILE.
+Reads first 8K for session identity, last 32K for recent messages.
 Returns alist with session-id, cwd, branch, timestamp, prompt, last-output."
   (condition-case nil
-      (with-temp-buffer
-        (insert-file-contents jsonl-file)
-        (goto-char (point-min))
-        (let (first-user last-assistant last-user)
-          (while (not (eobp))
-            (let* ((line (buffer-substring (line-beginning-position)
-                                           (line-end-position)))
-                   (msg (condition-case nil
-                            (json-read-from-string line)
-                          (error nil))))
-              (when msg
-                (let ((type (alist-get 'type msg)))
-                  (when (equal type "user")
-                    (unless first-user (setq first-user msg))
-                    (setq last-user msg))
-                  (when (equal type "assistant")
-                    (setq last-assistant msg)))))
-            (forward-line 1))
-          (when first-user
-            (let ((last-prompt (magent--extract-text-content
-                                (or last-user first-user)))
-                  (last-output (magent--extract-text-content last-assistant)))
-              (list (cons 'session-id (alist-get 'sessionId first-user))
-                    (cons 'cwd (alist-get 'cwd first-user))
-                    (cons 'branch (alist-get 'gitBranch first-user))
-                    (cons 'timestamp (alist-get 'timestamp first-user))
-                    (cons 'prompt
-                          (when (stringp last-prompt)
-                            (truncate-string-to-width last-prompt 200)))
-                    (cons 'last-output
-                          (when (stringp last-output)
-                            last-output)))))))
+      (let* ((chunks (magent--read-file-head-and-tail jsonl-file 8192 32768))
+             (head (car chunks))
+             (tail (cdr chunks))
+             ;; First user message from head — gives us session identity
+             (head-users (magent--parse-jsonl-messages head "user"))
+             (first-user (car head-users))
+             ;; Last messages from tail (or head if file is small)
+             (tail-text (or tail head))
+             (tail-users (magent--parse-jsonl-messages tail-text "user"))
+             (tail-assistants (magent--parse-jsonl-messages tail-text "assistant"))
+             (last-user (car (last tail-users)))
+             (last-assistant (car (last tail-assistants))))
+        (when first-user
+          (let ((last-prompt (magent--extract-text-content
+                              (or last-user first-user)))
+                (last-output (magent--extract-text-content last-assistant)))
+            (list (cons 'session-id (alist-get 'sessionId first-user))
+                  (cons 'cwd (alist-get 'cwd first-user))
+                  (cons 'branch (alist-get 'gitBranch first-user))
+                  (cons 'timestamp (alist-get 'timestamp first-user))
+                  (cons 'prompt
+                        (when (stringp last-prompt)
+                          (truncate-string-to-width last-prompt 200)))
+                  (cons 'last-output
+                        (when (stringp last-output)
+                          last-output))))))
     (error nil)))
 
 (defun magent-discover-sessions (&optional filter-dirs)

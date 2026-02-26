@@ -67,8 +67,35 @@ Updates session-id on existing idle works if discovered has a newer one."
               (discovered (magent-discover-sessions magent-discover-dirs)))
           (setq magent--works (magent--merge-discovered
                                (or saved nil) discovered))))
-      (magent-refresh))
+      (magent-refresh)
+      (magent-watch-start))
     (switch-to-buffer buf)))
+
+;;; File watcher — auto-refresh when sessions change
+
+(defvar magent--file-watcher nil
+  "File notify descriptor for watching claude projects dir.")
+
+(defun magent--on-session-change (_event)
+  "Called when a file changes in the claude projects directory."
+  (magent--schedule-refresh))
+
+(defun magent-watch-start ()
+  "Start watching `magent-claude-projects-dir' for changes."
+  (magent-watch-stop)
+  (when (and (file-directory-p magent-claude-projects-dir)
+             (fboundp 'file-notify-add-watch))
+    (setq magent--file-watcher
+          (file-notify-add-watch
+           magent-claude-projects-dir
+           '(change)
+           #'magent--on-session-change))))
+
+(defun magent-watch-stop ()
+  "Stop watching for session changes."
+  (when magent--file-watcher
+    (file-notify-rm-watch magent--file-watcher)
+    (setq magent--file-watcher nil)))
 
 (provide 'magent)
 ;;; magent.el ends here

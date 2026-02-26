@@ -302,8 +302,10 @@
     ("Git"
      ("c"     magent-tell-commit         "Tell agent to commit")
      ("P"     magent-tell-pr             "Tell agent to open PR")
-     ("d"     magent-diff                "Diff (magit-diff in worktree)")
-     ("f"     magent-fetch               "Fetch in worktree"))
+     ("d"     magent-diff                "Diff unstaged")
+     ("="     magent-diff-since-start    "Diff since agent started")
+     ("f"     magent-fetch               "Fetch in worktree")
+     ("w"     magent-new-worktree        "New worktree + agent"))
     ("Tools"
      ("!"     magent-shell-command       "Shell command in worktree")
      ("$"     magent-show-process        "Show agent process buffer")
@@ -579,13 +581,29 @@ On a repo section, resume all idle Works under it."
       (setf (magent-work-state work) 'working)
       (magent-refresh))))
 
+(defun magent-diff-since-start ()
+  "Show diff from when the agent started to current HEAD."
+  (interactive)
+  (when-let ((work (magent--work-at-point)))
+    (let ((default-directory (magent-work-dir work))
+          (start (magent-work-start-commit work)))
+      (cond
+       ((and start (fboundp 'magit-diff-range))
+        (magit-diff-range (format "%s..HEAD" start)))
+       (start
+        (shell-command (format "git diff %s..HEAD" start)))
+       (t
+        (message "No start commit recorded. Use d for unstaged diff."))))))
+
 (defun magent-new-work ()
-  "Create a new Work item."
+  "Create a new Work item from an existing directory."
   (interactive)
   (let* ((dir (read-directory-name "Worktree directory: "))
          (purpose (read-string "Purpose: "))
          (prompt (read-string "Agent prompt (or empty to skip launch): "))
+         (start-commit (magent--git-head dir))
          (work (magent-work-create :dir dir :purpose purpose)))
+    (setf (magent-work-start-commit work) start-commit)
     (push work magent--works)
     (unless (string-empty-p prompt)
       (let ((sid (magent-backend-launch dir prompt)))
@@ -595,13 +613,122 @@ On a repo section, resume all idle Works under it."
     (magent-state-save magent--works)
     (magent-refresh)))
 
+(defun magent-new-worktree ()
+  "Create a new git worktree, then launch an agent in it."
+  (interactive)
+  (let* ((repo (or (magent--repo-at-point)
+                   (read-directory-name "Repository: ")))
+         (branch (read-string "Branch name: "))
+         (default-directory repo)
+         (base (with-temp-buffer
+                 (if (zerop (call-process "git" nil t nil
+                                          "symbolic-ref" "--short" "HEAD"))
+                     (string-trim (buffer-string))
+                   "main")))
+         ;; Create worktree
+         (wt-dir (expand-file-name
+                  (concat ".worktrees/" branch)
+                  repo)))
+    ;; Create the worktree
+    (let ((result (with-temp-buffer
+                    (call-process "git" nil t nil
+                                  "worktree" "add" "-b" branch
+                                  wt-dir base)
+                    (buffer-string))))
+      (if (not (file-directory-p wt-dir))
+          (message "Failed to create worktree: %s" result)
+        (let* ((purpose (read-string "Purpose: "))
+               (prompt (read-string "Agent prompt (or empty to skip): "))
+               (start-commit (magent--git-head wt-dir))
+               (work (magent-work-create :dir wt-dir :purpose purpose)))
+          (setf (magent-work-start-commit work) start-commit)
+          (push work magent--works)
+          (unless (string-empty-p prompt)
+            (let ((sid (magent-backend-launch wt-dir prompt)))
+              (setf (magent-work-session-id work) sid)
+              (setf (magent-work-state work) 'working)
+              (puthash sid work magent--session-works)))
+          (magent-state-save magent--works)
+          (magent-refresh)
+          (message "Created worktree %s from %s" branch base))))))
+
 (defun magent-mark-done ()
-  "Mark Work at point as done."
+  "Mark Work at point as done.
+If the work directory looks like a git worktree, offer to remove it."
   (interactive)
   (when-let ((work (magent--work-at-point)))
     (setf (magent-work-state work) 'done)
+    ;; Offer worktree cleanup if it's a worktree (not the main checkout)
+    (let ((dir (magent-work-dir work)))
+      (when (and (file-exists-p (expand-file-name ".git" dir))
+                 ;; .git is a file (not directory) in worktrees
+                 (not (file-directory-p (expand-file-name ".git" dir)))
+                 (yes-or-no-p (format "Remove worktree %s? "
+                                      (abbreviate-file-name dir))))
+        (let ((default-directory (magent-work-repo work)))
+          (call-process "git" nil nil nil "worktree" "remove" dir))))
     (magent-state-save magent--works)
     (magent-refresh)))
+
+(defun magent-org-dispatch ()
+  "Dispatch the org heading at point as a new agent work item.
+Run this with point on a TODO heading in an org file.
+Creates a worktree (if in a git repo) and launches an agent
+with the heading text as the prompt."
+  (interactive)
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Not in an org-mode buffer"))
+  (unless (org-at-heading-p)
+    (user-error "Not on an org heading"))
+  (let* ((heading (org-get-heading t t t t))
+         (repo (magent--git-repo-root default-directory)))
+    (if repo
+        ;; In a git repo — create worktree
+        (let* ((branch (read-string "Branch name: "
+                                    (replace-regexp-in-string
+                                     "[^a-zA-Z0-9/_-]" "-"
+                                     (downcase heading))))
+               (default-directory repo)
+               (base (with-temp-buffer
+                       (if (zerop (call-process "git" nil t nil
+                                                "symbolic-ref" "--short" "HEAD"))
+                           (string-trim (buffer-string))
+                         "main")))
+               (wt-dir (expand-file-name
+                        (concat ".worktrees/" branch) repo)))
+          (let ((result (with-temp-buffer
+                          (call-process "git" nil t nil
+                                        "worktree" "add" "-b" branch
+                                        wt-dir base)
+                          (buffer-string))))
+            (if (not (file-directory-p wt-dir))
+                (message "Failed to create worktree: %s" result)
+              (let* ((start-commit (magent--git-head wt-dir))
+                     (work (magent-work-create :dir wt-dir :purpose heading)))
+                (setf (magent-work-start-commit work) start-commit)
+                (push work magent--works)
+                (let ((sid (magent-backend-launch wt-dir heading)))
+                  (setf (magent-work-session-id work) sid)
+                  (setf (magent-work-state work) 'working)
+                  (puthash sid work magent--session-works))
+                (magent-state-save magent--works)
+                ;; Update org heading to IN-PROGRESS
+                (org-todo "NEXT")
+                (when (get-buffer "*magent*")
+                  (with-current-buffer "*magent*" (magent-refresh)))
+                (message "Dispatched: %s → %s" heading branch)))))
+      ;; Not in a git repo — just use current directory
+      (let* ((work (magent-work-create :dir default-directory :purpose heading)))
+        (push work magent--works)
+        (let ((sid (magent-backend-launch default-directory heading)))
+          (setf (magent-work-session-id work) sid)
+          (setf (magent-work-state work) 'working)
+          (puthash sid work magent--session-works))
+        (magent-state-save magent--works)
+        (org-todo "NEXT")
+        (when (get-buffer "*magent*")
+          (with-current-buffer "*magent*" (magent-refresh)))
+        (message "Dispatched: %s" heading)))))
 
 (defun magent-help ()
   "Show magent keybindings, generated from `magent-bindings'."
