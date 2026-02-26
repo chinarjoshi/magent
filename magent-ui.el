@@ -462,12 +462,21 @@ On a repo section, browse backlog."
     (let ((default-directory (magent-work-dir work)))
       (call-interactively #'shell-command))))
 
+(defun magent--ensure-session-registered (work)
+  "Ensure WORK is registered in `magent--session-works' for backend access."
+  (when-let ((sid (magent-work-session-id work)))
+    (unless (gethash sid magent--session-works)
+      (puthash sid work magent--session-works))))
+
 (defun magent-tell-commit ()
   "Tell the agent to commit its changes."
   (interactive)
   (when-let* ((work (magent--work-at-point))
               (sid (magent-work-session-id work)))
+    (magent--ensure-session-registered work)
     (magent-backend-send sid "commit your changes")
+    (setf (magent-work-state work) 'working)
+    (magent-refresh)
     (message "Told agent to commit.")))
 
 (defun magent-tell-pr ()
@@ -475,7 +484,10 @@ On a repo section, browse backlog."
   (interactive)
   (when-let* ((work (magent--work-at-point))
               (sid (magent-work-session-id work)))
+    (magent--ensure-session-registered work)
     (magent-backend-send sid "open a pull request")
+    (setf (magent-work-state work) 'working)
+    (magent-refresh)
     (message "Told agent to open PR.")))
 
 (defun magent-diff ()
@@ -513,6 +525,7 @@ On a repo section, resume all idle Works under it."
           (when (and (equal (magent-work-repo work) repo)
                      (magent-work-idle-p work)
                      (magent-work-session-id work))
+            (magent--ensure-session-registered work)
             (magent-backend-resume (magent-work-session-id work))
             (setf (magent-work-state work) 'working)
             (cl-incf resumed)))
@@ -526,6 +539,7 @@ On a repo section, resume all idle Works under it."
                   (sid (magent-work-session-id work)))
         (if (magent-work-idle-p work)
             (progn
+              (magent--ensure-session-registered work)
               (magent-backend-resume sid)
               (setf (magent-work-state work) 'working)
               (magent-refresh))
@@ -575,6 +589,7 @@ On a repo section, resume all idle Works under it."
   (interactive)
   (when-let* ((work (magent--work-at-point))
               (sid (magent-work-session-id work)))
+    (magent--ensure-session-registered work)
     (let ((input (read-string (format "Send to %s: "
                                       (magent-work-branch work)))))
       (magent-backend-send sid input)

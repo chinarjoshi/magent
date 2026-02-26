@@ -166,10 +166,30 @@ Buffers partial lines across filter invocations."
     session-id))
 
 (cl-defmethod magent-backend-send (session-id input)
-  "Send INPUT to the process for SESSION-ID."
-  (when-let ((proc (gethash session-id magent--processes)))
-    (when (process-live-p proc)
-      (process-send-string proc (concat input "\n")))))
+  "Send INPUT to the agent for SESSION-ID.
+If there's a running process, send via stdin.
+Otherwise, launch a new process with --resume to deliver the message."
+  (let ((proc (gethash session-id magent--processes)))
+    (if (and proc (process-live-p proc))
+        ;; Running process — send directly
+        (process-send-string proc (concat input "\n"))
+      ;; No running process — resume session with this input
+      (when-let ((work (gethash session-id magent--session-works)))
+        (let* ((default-directory (expand-file-name (magent-work-dir work)))
+               (args (list "-p" "--dangerously-skip-permissions"
+                           "--output-format" "stream-json"
+                           "--verbose"
+                           "--resume" session-id
+                           input))
+               (new-proc (apply #'start-process
+                                (format "magent-send-%s" session-id)
+                                (format " *magent-proc-%s*" session-id)
+                                magent-agent-command
+                                args)))
+          (set-process-filter new-proc (magent--process-filter session-id))
+          (set-process-sentinel new-proc (magent--process-sentinel session-id))
+          (puthash session-id new-proc magent--processes)
+          (setf (magent-work-state work) 'working))))))
 
 (cl-defmethod magent-backend-kill (session-id)
   "Kill the process for SESSION-ID."
