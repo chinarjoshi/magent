@@ -12,10 +12,6 @@
 
 ;;; Backend protocol
 
-(cl-defgeneric magent-backend-list ()
-  "Return list of active session alists.
-Each alist has keys: session-id, dir, state, files, recent.")
-
 (cl-defgeneric magent-backend-launch (dir prompt)
   "Start a new agent session in DIR with PROMPT. Return session-id.")
 
@@ -148,13 +144,9 @@ Buffers partial lines across filter invocations."
         (unless (eq (magent-work-state work) 'done)
           (setf (magent-work-state work) 'needs-input))))))
 
-;;; Default backend methods
-
-(cl-defmethod magent-backend-launch (dir prompt)
-  "Launch agent in DIR with PROMPT using `magent-agent-command'."
-  (let* ((session-id (format "magent-%s" (make-temp-name "")))
-         (default-directory (expand-file-name dir))
-         (args (append magent-agent-args (list prompt)))
+(defun magent--start-process (session-id dir args)
+  "Start a process for SESSION-ID in DIR with ARGS."
+  (let* ((default-directory (expand-file-name dir))
          (proc (apply #'start-process
                       session-id
                       (format " *magent-proc-%s*" session-id)
@@ -163,6 +155,15 @@ Buffers partial lines across filter invocations."
     (set-process-filter proc (magent--process-filter session-id))
     (set-process-sentinel proc (magent--process-sentinel session-id))
     (puthash session-id proc magent--processes)
+    proc))
+
+;;; Default backend methods
+
+(cl-defmethod magent-backend-launch (dir prompt)
+  "Launch agent in DIR with PROMPT using `magent-agent-command'."
+  (let ((session-id (format "magent-%s" (make-temp-name "")))
+        (args (append magent-agent-args (list prompt))))
+    (magent--start-process session-id dir args)
     session-id))
 
 (cl-defmethod magent-backend-send (session-id input)
@@ -175,21 +176,11 @@ Otherwise, launch a new process with --resume to deliver the message."
         (process-send-string proc (concat input "\n"))
       ;; No running process — resume session with this input
       (when-let ((work (gethash session-id magent--session-works)))
-        (let* ((default-directory (expand-file-name (magent-work-dir work)))
-               (args (list "-p" "--dangerously-skip-permissions"
-                           "--output-format" "stream-json"
-                           "--verbose"
-                           "--resume" session-id
-                           input))
-               (new-proc (apply #'start-process
-                                (format "magent-send-%s" session-id)
-                                (format " *magent-proc-%s*" session-id)
-                                magent-agent-command
-                                args)))
-          (set-process-filter new-proc (magent--process-filter session-id))
-          (set-process-sentinel new-proc (magent--process-sentinel session-id))
-          (puthash session-id new-proc magent--processes)
-          (setf (magent-work-state work) 'working))))))
+        (magent--start-process session-id
+                               (magent-work-dir work)
+                               (append magent-agent-args
+                                       (list "--resume" session-id input)))
+        (setf (magent-work-state work) 'working)))))
 
 (cl-defmethod magent-backend-kill (session-id)
   "Kill the process for SESSION-ID."
@@ -201,33 +192,12 @@ Otherwise, launch a new process with --resume to deliver the message."
 (cl-defmethod magent-backend-resume (session-id)
   "Resume a session by launching claude --resume SESSION-ID."
   (when-let ((work (gethash session-id magent--session-works)))
-    (let* ((dir (magent-work-dir work))
-           (default-directory (expand-file-name dir))
-           (args (append (list "-p" "--dangerously-skip-permissions"
-                               "--output-format" "stream-json"
-                               "--verbose"
-                               "--resume" session-id)
-                         nil))
-           (proc (apply #'start-process
-                        session-id
-                        (format " *magent-proc-%s*" session-id)
-                        magent-agent-command
-                        args)))
-      (set-process-filter proc (magent--process-filter session-id))
-      (set-process-sentinel proc (magent--process-sentinel session-id))
-      (puthash session-id proc magent--processes)
-      (setf (magent-work-state work) 'working)
-      session-id)))
-
-(cl-defmethod magent-backend-list ()
-  "Return list of active session info from running processes."
-  (let (result)
-    (maphash (lambda (sid proc)
-               (push (list (cons 'session-id sid)
-                           (cons 'alive (process-live-p proc)))
-                     result))
-             magent--processes)
-    result))
+    (magent--start-process session-id
+                           (magent-work-dir work)
+                           (append magent-agent-args
+                                   (list "--resume" session-id)))
+    (setf (magent-work-state work) 'working)
+    session-id))
 
 (provide 'magent-backend)
 ;;; magent-backend.el ends here

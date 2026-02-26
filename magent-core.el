@@ -38,30 +38,27 @@
         (setf (magent-work-branch w) (magent--git-branch dir))))
     w))
 
-(defun magent--git-repo-root (dir)
-  "Return the git repo root for DIR, or nil."
+(defun magent--git-command (dir &rest args)
+  "Run git ARGS in DIR and return trimmed output, or nil on error."
   (when (file-directory-p dir)
     (let ((default-directory dir))
       (with-temp-buffer
-        (when (zerop (call-process "git" nil t nil "rev-parse" "--show-toplevel"))
-          (file-name-as-directory (string-trim (buffer-string))))))))
+        (when (zerop (apply #'call-process "git" nil t nil args))
+          (let ((output (string-trim (buffer-string))))
+            (unless (string-empty-p output) output)))))))
+
+(defun magent--git-repo-root (dir)
+  "Return the git repo root for DIR, or nil."
+  (when-let ((root (magent--git-command dir "rev-parse" "--show-toplevel")))
+    (file-name-as-directory root)))
 
 (defun magent--git-branch (dir)
   "Return the current git branch for DIR, or nil."
-  (when (file-directory-p dir)
-    (let ((default-directory dir))
-      (with-temp-buffer
-        (when (zerop (call-process "git" nil t nil "rev-parse" "--abbrev-ref" "HEAD"))
-          (let ((branch (string-trim (buffer-string))))
-            (unless (string-empty-p branch) branch)))))))
+  (magent--git-command dir "rev-parse" "--abbrev-ref" "HEAD"))
 
 (defun magent--git-head (dir)
   "Return the current HEAD commit SHA for DIR, or nil."
-  (when (file-directory-p dir)
-    (let ((default-directory dir))
-      (with-temp-buffer
-        (when (zerop (call-process "git" nil t nil "rev-parse" "HEAD"))
-          (string-trim (buffer-string)))))))
+  (magent--git-command dir "rev-parse" "HEAD"))
 
 ;; State predicates
 
@@ -222,12 +219,7 @@ Modifies works in place, returns count of newly archived."
   (let ((content (alist-get 'content (alist-get 'message message))))
     (cond
      ((stringp content) content)
-     ((and (vectorp content))
-      (mapconcat (lambda (block)
-                   (when (equal (alist-get 'type block) "text")
-                     (alist-get 'text block)))
-                 content ""))
-     ((listp content)
+     ((or (vectorp content) (listp content))
       (mapconcat (lambda (block)
                    (when (equal (alist-get 'type block) "text")
                      (alist-get 'text block)))
@@ -301,6 +293,22 @@ Returns alist with session-id, cwd, branch, timestamp, prompt, last-output."
                           last-output))))))
     (error nil)))
 
+(defun magent--find-latest-jsonl (dir)
+  "Find the most recent .jsonl file in DIR."
+  (let ((jsonls (directory-files dir t "\\.jsonl$")))
+    (car (sort jsonls (lambda (a b)
+                        (time-less-p (file-attribute-modification-time
+                                      (file-attributes b))
+                                     (file-attribute-modification-time
+                                      (file-attributes a))))))))
+
+(defun magent--dir-matches-filter (cwd filter-dirs)
+  "Return non-nil if CWD matches FILTER-DIRS criteria."
+  (or (null filter-dirs)
+      (cl-some (lambda (d)
+                 (string-prefix-p (expand-file-name d) cwd))
+               filter-dirs)))
+
 (defun magent-discover-sessions (&optional filter-dirs)
   "Discover Claude sessions from `magent-claude-projects-dir'.
 Scans all project directories, extracts cwd from session metadata.
@@ -313,40 +321,26 @@ Returns list of Work structs (state idle, with session-id)."
       (dolist (proj-name (directory-files magent-claude-projects-dir nil "^-"))
         (let ((proj-dir (expand-file-name proj-name magent-claude-projects-dir)))
           (when (file-directory-p proj-dir)
-            ;; Find most recent session file
-            (let* ((jsonls (directory-files proj-dir t "\\.jsonl$"))
-                   (sorted (sort jsonls
-                                 (lambda (a b)
-                                   (time-less-p (file-attribute-modification-time
-                                                 (file-attributes b))
-                                                (file-attribute-modification-time
-                                                 (file-attributes a))))))
-                   (latest (car sorted)))
-              (when latest
-                (when-let ((meta (magent--session-metadata latest)))
-                  (let ((cwd (alist-get 'cwd meta))
-                        (sid (alist-get 'session-id meta))
-                        (branch (alist-get 'branch meta)))
-                    (when (and cwd
-                               (file-directory-p cwd)
-                               (not (gethash cwd seen-cwds))
-                               (or (null filter-dirs)
-                                   (cl-some (lambda (d)
-                                              (string-prefix-p
-                                               (expand-file-name d) cwd))
-                                            filter-dirs)))
-                      (puthash cwd t seen-cwds)
-                      (push (cons (file-attribute-modification-time
-                                   (file-attributes latest))
-                                  (magent-work--internal-create
-                                   :dir cwd
-                                   :repo (magent--git-repo-root cwd)
-                                   :branch (or branch (magent--git-branch cwd))
-                                   :purpose (or (alist-get 'prompt meta) "")
-                                   :state 'idle
-                                   :session-id sid
-                                   :last-output (alist-get 'last-output meta)))
-                            works))))))))))
+            (when-let* ((latest (magent--find-latest-jsonl proj-dir))
+                        (meta (magent--session-metadata latest))
+                        (cwd (alist-get 'cwd meta))
+                        (sid (alist-get 'session-id meta)))
+              (when (and (file-directory-p cwd)
+                         (not (gethash cwd seen-cwds))
+                         (magent--dir-matches-filter cwd filter-dirs))
+                (puthash cwd t seen-cwds)
+                (push (cons (file-attribute-modification-time
+                             (file-attributes latest))
+                            (magent-work--internal-create
+                             :dir cwd
+                             :repo (magent--git-repo-root cwd)
+                             :branch (or (alist-get 'branch meta)
+                                         (magent--git-branch cwd))
+                             :purpose (or (alist-get 'prompt meta) "")
+                             :state 'idle
+                             :session-id sid
+                             :last-output (alist-get 'last-output meta)))
+                      works)))))))
     ;; Sort by recency (most recent first), then strip timestamps
     (mapcar #'cdr
             (sort works (lambda (a b)

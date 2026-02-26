@@ -17,73 +17,40 @@
   "Faces for magent."
   :group 'magent)
 
-;; Branch faces — color tells you the state at a glance
-(defface magent-face-branch-working
+(defface magent-face-working
   '((((class color) (background dark)) :foreground "#3fb950")
     (((class color) (background light)) :foreground "#1a7f37")
     (t :inherit success))
-  "Face for branch names of working agents (GitHub Open green)."
+  "Face for working state (GitHub Open green)."
   :group 'magent-faces)
 
-(defface magent-face-branch-needs-input
-  '((t :inherit warning :weight bold))
-  "Face for branch names of agents needing input."
-  :group 'magent-faces)
-
-(defface magent-face-branch-idle
-  '((t :inherit shadow))
-  "Face for branch names of idle agents."
-  :group 'magent-faces)
-
-(defface magent-face-branch-done
-  '((((class color) (background dark)) :foreground "#c678dd")
-    (((class color) (background light)) :foreground "#a626a4")
-    (t :inherit success))
-  "Face for branch names of completed/merged work."
-  :group 'magent-faces)
-
-;; Status badge faces
-(defface magent-face-status-working
-  '((((class color) (background dark)) :foreground "#3fb950")
-    (((class color) (background light)) :foreground "#1a7f37")
-    (t :inherit success))
-  "Face for [working] status badge (GitHub Open green)."
-  :group 'magent-faces)
-
-(defface magent-face-status-needs-input
+(defface magent-face-needs-input
   '((((class color) (background dark)) :foreground "#e5c07b" :weight bold)
     (((class color) (background light)) :foreground "#986801" :weight bold)
     (t :inherit warning :weight bold))
-  "Face for [needs input] status badge."
+  "Face for needs-input state."
   :group 'magent-faces)
 
-(defface magent-face-status-idle
+(defface magent-face-idle
   '((t :inherit shadow))
-  "Face for [idle] status badge."
+  "Face for idle state."
   :group 'magent-faces)
 
-(defface magent-face-status-done
+(defface magent-face-done
   '((((class color) (background dark)) :foreground "#c678dd")
     (((class color) (background light)) :foreground "#a626a4")
     (t :inherit success))
-  "Face for [done/merged] status badge."
+  "Face for done state."
   :group 'magent-faces)
 
-;; Repo face — distinct from branch
 (defface magent-face-repo
   '((t :inherit magit-section-heading :weight bold))
   "Face for repo names."
   :group 'magent-faces)
 
-;; Archive faces
-(defface magent-face-archive-repo
+(defface magent-face-archive
   '((t :inherit shadow))
-  "Face for repo names in archive."
-  :group 'magent-faces)
-
-(defface magent-face-archive-branch
-  '((t :inherit shadow :slant italic))
-  "Face for branch names in archive."
+  "Face for archived items."
   :group 'magent-faces)
 
 ;;; Section types
@@ -105,22 +72,13 @@
 
 ;;; Helpers
 
-(defun magent--branch-face (state)
-  "Return the branch face for STATE."
+(defun magent--state-face (state)
+  "Return the face for STATE."
   (pcase state
-    ('working 'magent-face-branch-working)
-    ('needs-input 'magent-face-branch-needs-input)
-    ('idle 'magent-face-branch-idle)
-    ('done 'magent-face-branch-done)
-    (_ 'shadow)))
-
-(defun magent--status-face (state)
-  "Return the status badge face for STATE."
-  (pcase state
-    ('working 'magent-face-status-working)
-    ('needs-input 'magent-face-status-needs-input)
-    ('idle 'magent-face-status-idle)
-    ('done 'magent-face-status-done)
+    ('working 'magent-face-working)
+    ('needs-input 'magent-face-needs-input)
+    ('idle 'magent-face-idle)
+    ('done 'magent-face-done)
     (_ 'shadow)))
 
 (defun magent--status-label (state)
@@ -137,12 +95,6 @@
   (if (or (null repo) (equal repo "unknown"))
       "unknown"
     (file-name-nondirectory (directory-file-name repo))))
-
-(defun magent--format-recent (work)
-  "Format the most recent action for WORK."
-  (if-let ((r (car (magent-work-recent work))))
-      r
-    ""))
 
 (defun magent--purpose-oneliner (purpose)
   "Return a clean one-liner from PURPOSE string, or nil."
@@ -179,37 +131,36 @@
     (magit-insert-section (magent-work-section work t)
       (magit-insert-heading
         (concat
-         (propertize (format "  %s" branch) 'font-lock-face (magent--branch-face state))
+         (propertize (format "  %s" branch) 'font-lock-face (magent--state-face state))
          pad
          (propertize (format "[%s]" (magent--status-label state))
-                     'font-lock-face (magent--status-face state))
+                     'font-lock-face (magent--state-face state))
          (when oneliner
            (propertize (format "  %s" oneliner) 'font-lock-face 'shadow))))
       ;; Foldable body — first level: dir + last prompt (1-2 lines)
-      (let ((dir (abbreviate-file-name (magent-work-dir work)))
-            (purpose (magent-work-purpose work))
-            (output (magent-work-last-output work)))
-        (insert (propertize (format "    %s\n" dir) 'font-lock-face 'shadow))
-        ;; Last prompt — max 2 lines
-        (when (and purpose (not (string-empty-p purpose)))
-          (let* ((clean (replace-regexp-in-string "<[^>]+>" "" purpose))
-                 (clean (replace-regexp-in-string "\\`[ \t\n]+" "" clean))
+      (insert (propertize (format "    %s\n" (abbreviate-file-name (magent-work-dir work)))
+                          'font-lock-face 'shadow))
+      ;; Last prompt — max 2 lines
+      (when-let ((purpose (magent-work-purpose work)))
+        (unless (string-empty-p purpose)
+          (let* ((clean (replace-regexp-in-string "\\`[ \t\n]+" ""
+                                                   (replace-regexp-in-string "<[^>]+>" "" purpose)))
                  (lines (split-string clean "\n" t))
                  (display (mapconcat #'identity (seq-take lines 2) "\n    ")))
             (insert (propertize (format "    > %s\n"
                                         (truncate-string-to-width display 120))
-                                'font-lock-face 'shadow))))
-        ;; Files
-        (when (magent-work-files work)
-          (dolist (file (magent-work-files work))
-            (magit-insert-section (magent-file-section file)
-              (insert (format "    %s\n" file)))))
-        ;; PR
-        (when (magent-work-pr work)
-          (insert (propertize (format "    PR: %s\n" (magent-work-pr work))
-                              'font-lock-face 'shadow)))
-        ;; Last output — deeper fold
-        (when (and output (not (string-empty-p output)))
+                                'font-lock-face 'shadow)))))
+      ;; Files
+      (dolist (file (magent-work-files work))
+        (magit-insert-section (magent-file-section file)
+          (insert (format "    %s\n" file))))
+      ;; PR
+      (when (magent-work-pr work)
+        (insert (propertize (format "    PR: %s\n" (magent-work-pr work))
+                            'font-lock-face 'shadow)))
+      ;; Last output — deeper fold
+      (when-let ((output (magent-work-last-output work)))
+        (unless (string-empty-p output)
           (magit-insert-section (magit-section 'output t)
             (magit-insert-heading
               (propertize "    Agent output" 'font-lock-face 'shadow))
@@ -228,10 +179,10 @@
     (magit-insert-heading
       (concat
        (propertize (format "  %s" (magent--repo-name (magent-work-repo work)))
-                   'font-lock-face 'magent-face-archive-repo)
+                   'font-lock-face 'magent-face-archive)
        (propertize " - " 'font-lock-face 'shadow)
        (propertize (or (magent-work-branch work) "?")
-                   'font-lock-face 'magent-face-archive-branch)))))
+                   'font-lock-face 'magent-face-archive)))))
 
 (defun magent--insert-repo-section (repo works col)
   "Insert a repo section for REPO with WORKS, status at COL."
@@ -324,17 +275,15 @@
       (dolist (binding (cdr group))
         (let ((key (car binding))
               (cmd (cadr binding)))
-          (unless (or (lookup-key magit-section-mode-map (kbd key))
-                      (member key '("g" "n" "p")))
+          (unless (lookup-key magit-section-mode-map (kbd key))
             (define-key map (kbd key) cmd)))))
+    ;; For non-Evil users
+    (unless (featurep 'evil)
+      (define-key map (kbd "g") #'magent-refresh)
+      (define-key map (kbd "n") #'magit-section-forward)
+      (define-key map (kbd "p") #'magit-section-backward))
     map)
   "Keymap for `magent-mode'.")
-
-;; Bind g/n/p for non-Evil users
-(unless (featurep 'evil)
-  (define-key magent-mode-map (kbd "g") #'magent-refresh)
-  (define-key magent-mode-map (kbd "n") #'magit-section-forward)
-  (define-key magent-mode-map (kbd "p") #'magit-section-backward))
 
 (define-derived-mode magent-mode magit-section-mode "Magent"
   "Major mode for the magent dashboard."
@@ -345,13 +294,6 @@
 ;; Evil integration
 (with-eval-after-load 'evil
   (evil-set-initial-state 'magent-mode 'normal)
-  (let ((map (evil-get-auxiliary-keymap magent-mode-map 'normal t t)))
-    (dolist (group magent-bindings)
-      (dolist (binding (cdr group))
-        (let ((key (car binding))
-              (cmd (cadr binding)))
-          (unless (member key '("g" "n" "p"))
-            (define-key map (kbd key) cmd))))))
   (evil-define-key* 'normal magent-mode-map
     "q" #'quit-window
     "j" #'magit-section-forward
@@ -429,12 +371,10 @@ On a repo section, browse backlog."
   (when-let ((work (magent--work-at-point)))
     (let ((default-directory (magent-work-dir work))
           (sid (magent-work-session-id work)))
-      (cond
-       ((fboundp 'claude-code--start)
-        (if sid
-            (claude-code--start nil (list "--resume" sid) nil t)
-          (claude-code--start nil nil nil t)))
-       (t
+      (if (fboundp 'claude-code--start)
+          (claude-code--start nil
+                              (when sid (list "--resume" sid))
+                              nil t)
         (if sid
             (let* ((buf-name (format "*magent-agent-%s*"
                                      (or (magent-work-branch work) "agent")))
@@ -443,7 +383,7 @@ On a repo section, browse backlog."
                          magent-agent-command nil
                          "--resume" sid)))
               (switch-to-buffer-other-window buf))
-          (message "No session to resume. Use N to create one.")))))))
+          (message "No session to resume. Use N to create one."))))))
 
 (defun magent-show-process ()
   "Show the agent process buffer for Work at point."
@@ -628,44 +568,46 @@ On a repo section, resume all idle Works under it."
     (magent-state-save magent--works)
     (magent-refresh)))
 
-(defun magent-new-worktree ()
-  "Create a new git worktree, then launch an agent in it."
-  (interactive)
-  (let* ((repo (or (magent--repo-at-point)
-                   (read-directory-name "Repository: ")))
-         (branch (read-string "Branch name: "))
-         (default-directory repo)
+(defun magent--create-worktree (repo branch)
+  "Create a git worktree for BRANCH in REPO. Return the worktree dir or nil."
+  (let* ((default-directory repo)
          (base (with-temp-buffer
                  (if (zerop (call-process "git" nil t nil
                                           "symbolic-ref" "--short" "HEAD"))
                      (string-trim (buffer-string))
                    "main")))
-         ;; Create worktree
-         (wt-dir (expand-file-name
-                  (concat ".worktrees/" branch)
-                  repo)))
-    ;; Create the worktree
+         (wt-dir (expand-file-name (concat ".worktrees/" branch) repo)))
     (let ((result (with-temp-buffer
                     (call-process "git" nil t nil
                                   "worktree" "add" "-b" branch
                                   wt-dir base)
                     (buffer-string))))
-      (if (not (file-directory-p wt-dir))
-          (message "Failed to create worktree: %s" result)
-        (let* ((purpose (read-string "Purpose: "))
-               (prompt (read-string "Agent prompt (or empty to skip): "))
-               (start-commit (magent--git-head wt-dir))
-               (work (magent-work-create :dir wt-dir :purpose purpose)))
-          (setf (magent-work-start-commit work) start-commit)
-          (push work magent--works)
-          (unless (string-empty-p prompt)
-            (let ((sid (magent-backend-launch wt-dir prompt)))
-              (setf (magent-work-session-id work) sid)
-              (setf (magent-work-state work) 'working)
-              (puthash sid work magent--session-works)))
-          (magent-state-save magent--works)
-          (magent-refresh)
-          (message "Created worktree %s from %s" branch base))))))
+      (if (file-directory-p wt-dir)
+          (progn (message "Created worktree %s from %s" branch base)
+                 wt-dir)
+        (message "Failed to create worktree: %s" result)
+        nil))))
+
+(defun magent-new-worktree ()
+  "Create a new git worktree, then launch an agent in it."
+  (interactive)
+  (let* ((repo (or (magent--repo-at-point)
+                   (read-directory-name "Repository: ")))
+         (branch (read-string "Branch name: ")))
+    (when-let ((wt-dir (magent--create-worktree repo branch)))
+      (let* ((purpose (read-string "Purpose: "))
+             (prompt (read-string "Agent prompt (or empty to skip): "))
+             (start-commit (magent--git-head wt-dir))
+             (work (magent-work-create :dir wt-dir :purpose purpose)))
+        (setf (magent-work-start-commit work) start-commit)
+        (push work magent--works)
+        (unless (string-empty-p prompt)
+          (let ((sid (magent-backend-launch wt-dir prompt)))
+            (setf (magent-work-session-id work) sid)
+            (setf (magent-work-state work) 'working)
+            (puthash sid work magent--session-works)))
+        (magent-state-save magent--works)
+        (magent-refresh)))))
 
 (defun magent-mark-done ()
   "Mark Work at point as done.
@@ -702,36 +644,21 @@ with the heading text as the prompt."
         (let* ((branch (read-string "Branch name: "
                                     (replace-regexp-in-string
                                      "[^a-zA-Z0-9/_-]" "-"
-                                     (downcase heading))))
-               (default-directory repo)
-               (base (with-temp-buffer
-                       (if (zerop (call-process "git" nil t nil
-                                                "symbolic-ref" "--short" "HEAD"))
-                           (string-trim (buffer-string))
-                         "main")))
-               (wt-dir (expand-file-name
-                        (concat ".worktrees/" branch) repo)))
-          (let ((result (with-temp-buffer
-                          (call-process "git" nil t nil
-                                        "worktree" "add" "-b" branch
-                                        wt-dir base)
-                          (buffer-string))))
-            (if (not (file-directory-p wt-dir))
-                (message "Failed to create worktree: %s" result)
-              (let* ((start-commit (magent--git-head wt-dir))
-                     (work (magent-work-create :dir wt-dir :purpose heading)))
-                (setf (magent-work-start-commit work) start-commit)
-                (push work magent--works)
-                (let ((sid (magent-backend-launch wt-dir heading)))
-                  (setf (magent-work-session-id work) sid)
-                  (setf (magent-work-state work) 'working)
-                  (puthash sid work magent--session-works))
-                (magent-state-save magent--works)
-                ;; Update org heading to IN-PROGRESS
-                (org-todo "NEXT")
-                (when (get-buffer "*magent*")
-                  (with-current-buffer "*magent*" (magent-refresh)))
-                (message "Dispatched: %s → %s" heading branch)))))
+                                     (downcase heading)))))
+          (when-let ((wt-dir (magent--create-worktree repo branch)))
+            (let* ((start-commit (magent--git-head wt-dir))
+                   (work (magent-work-create :dir wt-dir :purpose heading)))
+              (setf (magent-work-start-commit work) start-commit)
+              (push work magent--works)
+              (let ((sid (magent-backend-launch wt-dir heading)))
+                (setf (magent-work-session-id work) sid)
+                (setf (magent-work-state work) 'working)
+                (puthash sid work magent--session-works))
+              (magent-state-save magent--works)
+              (org-todo "NEXT")
+              (when (get-buffer "*magent*")
+                (with-current-buffer "*magent*" (magent-refresh)))
+              (message "Dispatched: %s → %s" heading branch))))
       ;; Not in a git repo — just use current directory
       (let* ((work (magent-work-create :dir default-directory :purpose heading)))
         (push work magent--works)
