@@ -3,163 +3,149 @@
 ;; Copyright (C) 2026
 
 ;; Author: magent contributors
+;; Version: 0.1.0
 ;; Package-Requires: ((emacs "29.1") (magit-section "4.0"))
+;; Keywords: tools, processes
+;; URL: https://github.com/chijoshi/magent
 
 ;;; Commentary:
 
-;; Work struct, state management, and persistence for magent.
+;; Magent is a magit-style interface for orchestrating AI agent sessions
+;; across repositories and worktrees.
+;;
+;; Use `M-x magent' to open the dashboard.
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'json)
 
-(cl-defstruct (magent-work (:constructor magent-work--internal-create)
-                           (:copier nil))
+(defgroup magent nil
+  "Magit-style porcelain for AI agents."
+  :group 'tools
+  :prefix "magent-")
+
+;;; Work struct — the single core object
+
+(cl-defstruct (magent-work (:copier nil))
   "A piece of work: one worktree with one agent session."
-  (dir nil :type string :documentation "Worktree path.")
-  (repo nil :type (or string null) :documentation "Repo root, derived from dir.")
-  (branch nil :type (or string null) :documentation "Git branch, derived from dir.")
-  (purpose "" :type string :documentation "What the agent is doing.")
-  (state 'idle :type symbol :documentation "One of: working, needs-input, idle, done.")
-  (session-id nil :type (or string null) :documentation "Backend session ID.")
-  (pr nil :type (or string null) :documentation "PR URL.")
-  (files nil :type list :documentation "Files the agent is currently touching.")
-  (recent nil :type list :documentation "Recent actions/tool calls.")
-  (last-output nil :type (or string null) :documentation "Last assistant response text.")
-  (start-commit nil :type (or string null) :documentation "Commit SHA when agent work started."))
+  (dir nil :type string)
+  (repo nil :type (or string null))
+  (branch nil :type (or string null))
+  (purpose "" :type string)
+  (state 'idle :type symbol)          ; working | idle | done
+  (session-id nil :type (or string null))
+  (pr nil :type (or string null))
+  (files nil :type list)
+  (recent nil :type list)
+  (last-output nil :type (or string null))
+  (start-commit nil :type (or string null)))
 
-(defun magent-work-create (&rest args)
-  "Create a Work, deriving repo and branch from :dir."
-  (let ((w (apply #'magent-work--internal-create args)))
-    (when (magent-work-dir w)
-      (let ((dir (expand-file-name (magent-work-dir w))))
-        (setf (magent-work-dir w) dir)
-        (setf (magent-work-repo w) (magent--git-repo-root dir))
-        (setf (magent-work-branch w) (magent--git-branch dir))))
-    w))
+;;; Git helpers
 
-(defun magent--git-command (dir &rest args)
-  "Run git ARGS in DIR and return trimmed output, or nil on error."
+(defun magent--git (dir &rest args)
+  "Run git ARGS in DIR, return trimmed output or nil on error."
   (when (file-directory-p dir)
     (let ((default-directory dir))
       (with-temp-buffer
         (when (zerop (apply #'call-process "git" nil t nil args))
-          (let ((output (string-trim (buffer-string))))
-            (unless (string-empty-p output) output)))))))
+          (let ((out (string-trim (buffer-string))))
+            (unless (string-empty-p out) out)))))))
 
 (defun magent--git-repo-root (dir)
-  "Return the git repo root for DIR, or nil."
-  (when-let ((root (magent--git-command dir "rev-parse" "--show-toplevel")))
+  "Return git repo root for DIR, or nil."
+  (when-let ((root (magent--git dir "rev-parse" "--show-toplevel")))
     (file-name-as-directory root)))
 
 (defun magent--git-branch (dir)
-  "Return the current git branch for DIR, or nil."
-  (magent--git-command dir "rev-parse" "--abbrev-ref" "HEAD"))
+  "Return current git branch for DIR, or nil."
+  (magent--git dir "rev-parse" "--abbrev-ref" "HEAD"))
 
 (defun magent--git-head (dir)
-  "Return the current HEAD commit SHA for DIR, or nil."
-  (magent--git-command dir "rev-parse" "HEAD"))
-
-;; State predicates
-
-(defun magent-work-working-p (work)
-  "Return non-nil if WORK is in working state."
-  (eq (magent-work-state work) 'working))
-
-(defun magent-work-needs-input-p (work)
-  "Return non-nil if WORK needs user input."
-  (eq (magent-work-state work) 'needs-input))
-
-(defun magent-work-idle-p (work)
-  "Return non-nil if WORK is idle."
-  (eq (magent-work-state work) 'idle))
-
-(defun magent-work-done-p (work)
-  "Return non-nil if WORK is done."
-  (eq (magent-work-state work) 'done))
+  "Return current HEAD SHA for DIR, or nil."
+  (magent--git dir "rev-parse" "HEAD"))
 
 (defun magent--branch-merged-p (dir branch)
   "Return non-nil if BRANCH is merged into the default branch in DIR."
   (when (and dir branch (file-directory-p dir)
              (not (member branch '("main" "master" "HEAD"))))
-    (let ((default-directory dir))
-      ;; Find default branch (origin/HEAD -> main or master)
-      (let ((default-branch
-             (with-temp-buffer
-               (if (zerop (call-process "git" nil t nil
-                                        "symbolic-ref" "refs/remotes/origin/HEAD"))
-                   (replace-regexp-in-string
-                    "^refs/remotes/origin/" ""
-                    (string-trim (buffer-string)))
-                 "main"))))
-        ;; Check if branch is ancestor of default branch
-        (with-temp-buffer
-          (zerop (call-process "git" nil t nil
-                               "merge-base" "--is-ancestor"
-                               branch default-branch)))))))
+    (let* ((default-directory dir)
+           (default-branch (or (magent--git dir "symbolic-ref" "refs/remotes/origin/HEAD")
+                               "refs/remotes/origin/main"))
+           (default-branch (replace-regexp-in-string
+                            "^refs/remotes/origin/" "" default-branch)))
+      (with-temp-buffer
+        (zerop (call-process "git" nil t nil
+                             "merge-base" "--is-ancestor"
+                             branch default-branch))))))
 
-;; Persistence
+;;; State
+
+(defun magent-work-working-p (w) (eq (magent-work-state w) 'working))
+(defun magent-work-idle-p (w) (eq (magent-work-state w) 'idle))
+(defun magent-work-done-p (w) (eq (magent-work-state w) 'done))
+
+(defun magent-auto-archive-merged (works)
+  "Mark WORKS whose branches have been merged as done."
+  (dolist (w works)
+    (when (and (not (magent-work-done-p w))
+               (magent--branch-merged-p (magent-work-repo w)
+                                        (magent-work-branch w)))
+      (setf (magent-work-state w) 'done))))
+
+;;; Persistence — just overrides, not the full work list.
+;; Discovery rebuilds the work list each time. We only persist:
+;; - start-commit (recorded when user creates work)
+;; - done state (manual archive)
+;; - purpose overrides (user-provided, better than JSONL prompt)
 
 (defcustom magent-state-file
   (expand-file-name "magent/state.el" user-emacs-directory)
-  "Path to persist Work state."
+  "Path to persist Work overrides."
   :type 'file
   :group 'magent)
 
-(defun magent--work-to-plist (work)
-  "Serialize WORK to a plist for persistence."
-  (list :dir (magent-work-dir work)
-        :repo (magent-work-repo work)
-        :branch (magent-work-branch work)
-        :purpose (magent-work-purpose work)
-        :state (magent-work-state work)
-        :session-id (magent-work-session-id work)
-        :pr (magent-work-pr work)
-        :start-commit (magent-work-start-commit work)))
-
-(defun magent--plist-to-work (plist)
-  "Deserialize a PLIST to a Work struct."
-  (let ((work (magent-work--internal-create
-               :dir (plist-get plist :dir)
-               :repo (plist-get plist :repo)
-               :branch (plist-get plist :branch)
-               :purpose (plist-get plist :purpose)
-               :state (plist-get plist :state)
-               :session-id (plist-get plist :session-id)
-               :pr (plist-get plist :pr)
-               :start-commit (plist-get plist :start-commit))))
-    ;; Re-derive repo/branch if missing (old state files)
-    (when (and (magent-work-dir work)
-               (null (magent-work-repo work)))
-      (setf (magent-work-repo work)
-            (magent--git-repo-root (magent-work-dir work)))
-      (setf (magent-work-branch work)
-            (magent--git-branch (magent-work-dir work))))
-    work))
-
 (defun magent-state-save (works)
-  "Save WORKS list to `magent-state-file'."
-  (let ((dir (file-name-directory magent-state-file)))
-    (unless (file-directory-p dir)
-      (make-directory dir t)))
-  (with-temp-file magent-state-file
-    (insert ";; -*- lisp-data -*-\n")
-    (insert ";; Magent state — do not edit by hand.\n")
-    (pp (mapcar #'magent--work-to-plist works) (current-buffer))))
+  "Save overrides for WORKS to `magent-state-file'."
+  (let ((dir (file-name-directory magent-state-file))
+        (overrides nil))
+    (unless (file-directory-p dir) (make-directory dir t))
+    (dolist (w works)
+      ;; Only persist works with user-set data
+      (when (or (magent-work-done-p w)
+                (magent-work-start-commit w))
+        (push (list :dir (magent-work-dir w)
+                    :state (magent-work-state w)
+                    :start-commit (magent-work-start-commit w))
+              overrides)))
+    (with-temp-file magent-state-file
+      (insert ";; -*- lisp-data -*-\n")
+      (pp (nreverse overrides) (current-buffer)))))
 
 (defun magent-state-load ()
-  "Load Works from `magent-state-file'.  Return list or nil."
+  "Load overrides from `magent-state-file'. Return alist keyed by dir."
   (when (file-exists-p magent-state-file)
     (condition-case nil
         (with-temp-buffer
           (insert-file-contents magent-state-file)
-          (mapcar #'magent--plist-to-work (read (current-buffer))))
+          (let ((plists (read (current-buffer)))
+                (table (make-hash-table :test 'equal)))
+            (dolist (p plists)
+              (puthash (plist-get p :dir) p table))
+            table))
       (error nil))))
 
-(defcustom magent-backlog-glob "*.org"
-  "Glob pattern for finding backlog org files in repo roots."
-  :type 'string
-  :group 'magent)
+(defun magent--apply-overrides (works overrides)
+  "Apply OVERRIDES hash table to WORKS list."
+  (when overrides
+    (dolist (w works)
+      (when-let ((ov (gethash (magent-work-dir w) overrides)))
+        (when (plist-get ov :start-commit)
+          (setf (magent-work-start-commit w) (plist-get ov :start-commit)))
+        (when (eq (plist-get ov :state) 'done)
+          (setf (magent-work-state w) 'done))))))
+
+;;; Grouping
 
 (defun magent-group-by-repo (works)
   "Group WORKS by repo. Return alist of (repo . works)."
@@ -172,8 +158,15 @@
           (push (cons repo (list w)) groups))))
     (nreverse groups)))
 
+;;; Backlog
+
+(defcustom magent-backlog-glob "*.org"
+  "Glob pattern for finding backlog org files in repo roots."
+  :type 'string
+  :group 'magent)
+
 (defun magent-count-todos-in-file (file)
-  "Count TODO headings in an org FILE."
+  "Count TODO/NEXT/WAITING headings in an org FILE."
   (with-temp-buffer
     (insert-file-contents file)
     (let ((count 0))
@@ -184,29 +177,14 @@
 
 (defun magent-repo-todo-count (repo-dir)
   "Count total TODOs across org files in REPO-DIR root."
-  (let ((org-files (file-expand-wildcards
-                    (expand-file-name magent-backlog-glob repo-dir)))
-        (total 0))
-    (dolist (f org-files)
+  (let ((total 0))
+    (dolist (f (file-expand-wildcards
+                (expand-file-name magent-backlog-glob repo-dir)))
       (when (file-regular-p f)
         (cl-incf total (magent-count-todos-in-file f))))
     total))
 
-(defun magent-auto-archive-merged (works)
-  "Mark WORKS whose branches have been merged as done.
-Modifies works in place, returns count of newly archived."
-  (let ((count 0))
-    (dolist (w works)
-      (when (and (not (magent-work-done-p w))
-                 (magent--branch-merged-p (magent-work-repo w)
-                                          (magent-work-branch w)))
-        (setf (magent-work-state w) 'done)
-        (cl-incf count)))
-    count))
-
 ;;; Session discovery from ~/.claude/projects/
-
-(require 'json)
 
 (defcustom magent-claude-projects-dir
   (expand-file-name "projects" (expand-file-name ".claude" "~"))
@@ -214,137 +192,114 @@ Modifies works in place, returns count of newly archived."
   :type 'directory
   :group 'magent)
 
-(defun magent--extract-text-content (message)
-  "Extract text content from a MESSAGE alist's content field."
+(defcustom magent-discover-dirs nil
+  "Directories to limit session discovery. Nil means discover all."
+  :type '(repeat directory)
+  :group 'magent)
+
+(defun magent--extract-text (message)
+  "Extract text content from a MESSAGE alist."
   (let ((content (alist-get 'content (alist-get 'message message))))
     (cond
      ((stringp content) content)
      ((or (vectorp content) (listp content))
-      (mapconcat (lambda (block)
-                   (when (equal (alist-get 'type block) "text")
-                     (alist-get 'text block)))
+      (mapconcat (lambda (b)
+                   (when (equal (alist-get 'type b) "text")
+                     (alist-get 'text b)))
                  content ""))
      (t nil))))
 
-(defun magent--read-file-head-and-tail (file head-bytes tail-bytes)
-  "Read first HEAD-BYTES and last TAIL-BYTES of FILE.
-Returns (HEAD-STRING . TAIL-STRING)."
-  (let* ((attrs (file-attributes file))
-         (size (file-attribute-size attrs))
-         (head (with-temp-buffer
-                 (insert-file-contents file nil 0 (min head-bytes size))
-                 (buffer-string)))
-         (tail (if (> size (+ head-bytes tail-bytes))
-                   (with-temp-buffer
-                     (insert-file-contents file nil (- size tail-bytes) size)
-                     (buffer-string))
-                 ;; File small enough that head covers everything
-                 nil)))
-    (cons head tail)))
-
-(defun magent--parse-jsonl-messages (text &optional type-filter)
-  "Parse JSONL TEXT, return messages matching TYPE-FILTER (or all)."
-  (let (results)
-    (with-temp-buffer
-      (insert text)
-      (goto-char (point-min))
-      (while (not (eobp))
-        (let* ((line (buffer-substring (line-beginning-position)
-                                       (line-end-position)))
-               (msg (condition-case nil
-                        (json-read-from-string line)
-                      (error nil))))
-          (when (and msg (or (null type-filter)
-                             (equal (alist-get 'type msg) type-filter)))
-            (push msg results)))
-        (forward-line 1)))
-    (nreverse results)))
-
 (defun magent--session-metadata (jsonl-file)
-  "Extract metadata from JSONL-FILE.
-Reads first 8K for session identity, last 32K for recent messages.
-Returns alist with session-id, cwd, branch, timestamp, prompt, last-output."
+  "Extract metadata from JSONL-FILE (reads head + tail, not whole file)."
   (condition-case nil
-      (let* ((chunks (magent--read-file-head-and-tail jsonl-file 8192 32768))
-             (head (car chunks))
-             (tail (cdr chunks))
-             ;; First user message from head — gives us session identity
-             (head-users (magent--parse-jsonl-messages head "user"))
-             (first-user (car head-users))
-             ;; Last messages from tail (or head if file is small)
-             (tail-text (or tail head))
-             (tail-users (magent--parse-jsonl-messages tail-text "user"))
-             (tail-assistants (magent--parse-jsonl-messages tail-text "assistant"))
-             (last-user (car (last tail-users)))
-             (last-assistant (car (last tail-assistants))))
+      (let* ((size (file-attribute-size (file-attributes jsonl-file)))
+             (head-size (min 8192 size))
+             (tail-size (min 32768 size))
+             (head (with-temp-buffer
+                     (insert-file-contents jsonl-file nil 0 head-size)
+                     (buffer-string)))
+             (tail (when (> size (+ head-size tail-size))
+                     (with-temp-buffer
+                       (insert-file-contents jsonl-file nil (- size tail-size) size)
+                       (buffer-string))))
+             (first-user nil) (last-user nil) (last-assistant nil))
+        ;; Parse head for session identity
+        (with-temp-buffer
+          (insert head)
+          (goto-char (point-min))
+          (while (not (eobp))
+            (let ((msg (condition-case nil
+                           (json-read-from-string
+                            (buffer-substring (line-beginning-position) (line-end-position)))
+                         (error nil))))
+              (when msg
+                (pcase (alist-get 'type msg)
+                  ("user" (unless first-user (setq first-user msg)) (setq last-user msg))
+                  ("assistant" (setq last-assistant msg)))))
+            (forward-line 1)))
+        ;; Parse tail for recent messages
+        (when tail
+          (with-temp-buffer
+            (insert tail)
+            (goto-char (point-min))
+            (while (not (eobp))
+              (let ((msg (condition-case nil
+                             (json-read-from-string
+                              (buffer-substring (line-beginning-position) (line-end-position)))
+                           (error nil))))
+                (when msg
+                  (pcase (alist-get 'type msg)
+                    ("user" (setq last-user msg))
+                    ("assistant" (setq last-assistant msg)))))
+              (forward-line 1))))
         (when first-user
-          (let ((last-prompt (magent--extract-text-content
-                              (or last-user first-user)))
-                (last-output (magent--extract-text-content last-assistant)))
+          (let ((prompt (magent--extract-text (or last-user first-user)))
+                (output (magent--extract-text last-assistant)))
             (list (cons 'session-id (alist-get 'sessionId first-user))
                   (cons 'cwd (alist-get 'cwd first-user))
                   (cons 'branch (alist-get 'gitBranch first-user))
-                  (cons 'timestamp (alist-get 'timestamp first-user))
-                  (cons 'prompt
-                        (when (stringp last-prompt)
-                          (truncate-string-to-width last-prompt 200)))
-                  (cons 'last-output
-                        (when (stringp last-output)
-                          last-output))))))
+                  (cons 'prompt (when (stringp prompt)
+                                  (truncate-string-to-width prompt 200)))
+                  (cons 'last-output (when (stringp output) output))))))
     (error nil)))
 
-(defun magent--find-latest-jsonl (dir)
-  "Find the most recent .jsonl file in DIR."
-  (let ((jsonls (directory-files dir t "\\.jsonl$")))
-    (car (sort jsonls (lambda (a b)
-                        (time-less-p (file-attribute-modification-time
-                                      (file-attributes b))
-                                     (file-attribute-modification-time
-                                      (file-attributes a))))))))
-
-(defun magent--dir-matches-filter (cwd filter-dirs)
-  "Return non-nil if CWD matches FILTER-DIRS criteria."
-  (or (null filter-dirs)
-      (cl-some (lambda (d)
-                 (string-prefix-p (expand-file-name d) cwd))
-               filter-dirs)))
-
-(defun magent-discover-sessions (&optional filter-dirs)
-  "Discover Claude sessions from `magent-claude-projects-dir'.
-Scans all project directories, extracts cwd from session metadata.
-If FILTER-DIRS is non-nil, only return sessions whose cwd is under
-one of those directories.
-Returns list of Work structs (state idle, with session-id)."
+(defun magent-discover-sessions ()
+  "Discover Claude sessions. Returns list of Work structs.
+Respects `magent-discover-dirs' for filtering."
   (let ((works nil)
-        (seen-cwds (make-hash-table :test 'equal)))
+        (seen (make-hash-table :test 'equal)))
     (when (file-directory-p magent-claude-projects-dir)
-      (dolist (proj-name (directory-files magent-claude-projects-dir nil "^-"))
-        (let ((proj-dir (expand-file-name proj-name magent-claude-projects-dir)))
-          (when (file-directory-p proj-dir)
-            (when-let* ((latest (magent--find-latest-jsonl proj-dir))
-                        (meta (magent--session-metadata latest))
-                        (cwd (alist-get 'cwd meta))
-                        (sid (alist-get 'session-id meta)))
-              (when (and (file-directory-p cwd)
-                         (not (gethash cwd seen-cwds))
-                         (magent--dir-matches-filter cwd filter-dirs))
-                (puthash cwd t seen-cwds)
-                (push (cons (file-attribute-modification-time
-                             (file-attributes latest))
-                            (magent-work--internal-create
-                             :dir cwd
-                             :repo (magent--git-repo-root cwd)
-                             :branch (or (alist-get 'branch meta)
-                                         (magent--git-branch cwd))
-                             :purpose (or (alist-get 'prompt meta) "")
-                             :state 'idle
-                             :session-id sid
-                             :last-output (alist-get 'last-output meta)))
-                      works)))))))
-    ;; Sort by recency (most recent first), then strip timestamps
-    (mapcar #'cdr
-            (sort works (lambda (a b)
-                          (time-less-p (car b) (car a)))))))
+      (dolist (name (directory-files magent-claude-projects-dir nil "^-"))
+        (let ((dir (expand-file-name name magent-claude-projects-dir)))
+          (when (file-directory-p dir)
+            (let* ((jsonls (directory-files dir t "\\.jsonl$"))
+                   (latest (car (sort jsonls
+                                      (lambda (a b)
+                                        (time-less-p
+                                         (file-attribute-modification-time (file-attributes b))
+                                         (file-attribute-modification-time (file-attributes a))))))))
+              (when latest
+                (when-let* ((meta (magent--session-metadata latest))
+                            (cwd (alist-get 'cwd meta))
+                            (sid (alist-get 'session-id meta)))
+                  (when (and (file-directory-p cwd)
+                             (not (gethash cwd seen))
+                             (or (null magent-discover-dirs)
+                                 (cl-some (lambda (d)
+                                            (string-prefix-p (expand-file-name d) cwd))
+                                          magent-discover-dirs)))
+                    (puthash cwd t seen)
+                    (push (cons (file-attribute-modification-time (file-attributes latest))
+                                (make-magent-work
+                                 :dir cwd
+                                 :repo (magent--git-repo-root cwd)
+                                 :branch (or (alist-get 'branch meta) (magent--git-branch cwd))
+                                 :purpose (or (alist-get 'prompt meta) "")
+                                 :state 'idle
+                                 :session-id sid
+                                 :last-output (alist-get 'last-output meta)))
+                          works)))))))))
+    (mapcar #'cdr (sort works (lambda (a b) (time-less-p (car b) (car a)))))))
 
 (provide 'magent-core)
 ;;; magent-core.el ends here
