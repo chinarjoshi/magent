@@ -1,6 +1,6 @@
 # magent
 
-magit for agents. A porcelain over your AI coding sessions.
+I got tired of multiplexing 10 kitty tabs each running a Claude Code session, round-robining through that shitty Ink-based TUI to figure out which agent needs me. A magit-style porcelain with single-key bindings makes me feel more like a CEO and less like a terminal babysitter.
 
 ```
 Active (12)
@@ -18,7 +18,7 @@ Archive (3)
 
 ## what
 
-Auto-discovers your Claude Code sessions from `~/.claude/projects/`. Groups by repo. Color = state. TAB to fold. RET to open the session. `i` to send a prompt. `c` to tell it to commit. That's it.
+Auto-discovers your Claude Code sessions from `~/.claude/projects/`. Groups by repo. Branch color = state. TAB to fold. RET to open the Claude Code session. `i` to send a prompt without leaving the dashboard. `c` to tell the agent to commit. That's it.
 
 ## install
 
@@ -53,7 +53,7 @@ b     browse backlog org files
 
 ## how it works
 
-Scans `~/.claude/projects/` for session JSONL files. Reads first 8K + last 32K (not the whole file). Extracts session ID, branch, last prompt, last output. Sends prompts to idle sessions via `claude -p --resume <id>`. Auto-archives branches merged into main.
+Scans `~/.claude/projects/` for Claude Code session JSONL files. Reads first 8K + last 32K (not the whole file). Extracts session ID, branch, last prompt, last output. Sends prompts to idle sessions via `claude -p --resume <id>`. Auto-archives branches merged into main.
 
 Three states: **working** (green), **idle** (grey), **done** (purple).
 
